@@ -136,8 +136,10 @@ let summary = optimize_sparse(&mut x, |x, grad, h| {
 - `BlockTridiagMat<B>` (fixed block size) and `BlockTridiagMatX<S>` (dynamic) with
   block Thomas/Takahashi factorization (`BlockTridiagLdlt`).
 - `block_sparse_types!` + `BlockSparseMat<T, S>` with compile-time block-pair
-  checks and an exact Schur solver (`BlockSparseLdlt`); `BlockSparseMatX<S>` for
-  runtime layouts.
+  checks and a block Schur solver (`BlockSparseLdlt`): independent eliminated
+  blocks are inverted and eliminated with dense per-block operations
+  (`S = H_rr − Σ C E⁻¹ Cᵀ`); other layouts use the scalar sparse Schur.
+  `BlockSparseMatX<S>` covers runtime layouts.
 - `Params::reduced()` selects the Schur reduced head block
   (`has_reduced`/`num_reduced` on LM, GN and DogLeg).
 

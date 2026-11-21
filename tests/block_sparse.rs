@@ -385,3 +385,117 @@ fn sparse_conversion_keeps_sorted_columns_and_matches_dense() {
         }
     }
 }
+
+#[test]
+fn same_type_off_diagonal_blocks_stay_symmetric() {
+    let mut h = BlockSparseMat::<TwoThreeSorted, f64>::with_counts(&[2, 0]);
+    // Two 2x2 "camera" blocks with a coupling block.
+    for i in 0..2 {
+        let mut b = h.block_mut::<2, 2>(i, i);
+        b.set_at(0, 0, 4.0);
+        b.set_at(1, 1, 4.0);
+    }
+    {
+        let mut b = h.block_mut::<2, 2>(0, 1);
+        b.set_at(0, 0, 0.5);
+        b.set_at(0, 1, -0.25);
+        b.set_at(1, 0, 0.75);
+        b.set_at(1, 1, 0.125);
+    }
+    // Block (1, 0) is the transpose of block (0, 1).
+    assert_relative_eq!(h.get(2, 0), 0.5);
+    assert_relative_eq!(h.get(3, 0), -0.25);
+    assert_relative_eq!(h.get(2, 1), 0.75);
+    assert_relative_eq!(h.get(3, 1), 0.125);
+    // Setting the lower block writes the upper one transposed.
+    h.set_entry(0, 2, 2.0);
+    assert_relative_eq!(h.get(2, 0), 2.0);
+
+    let sparse = h.to_sparse();
+    let dense = h.to_dense();
+    for j in 0..4 {
+        for i in 0..4 {
+            assert_relative_eq!(sparse.coeff(i, j), dense.elem(i, j), epsilon = 1e-12);
+        }
+    }
+}
+
+#[test]
+fn bundle_adjustment_layout_uses_the_block_schur() {
+    block_sparse_types!(Ba2, [2, 3]);
+    let cams = 2usize;
+    let points = 6usize;
+    let nr = 2 * cams;
+    let mut h = BlockSparseMat::<Ba2, f64>::with_counts(&[cams, points]);
+    for c in 0..cams {
+        let mut b = h.block_mut::<2, 2>(c, c);
+        b.set_at(0, 0, 6.0);
+        b.set_at(1, 1, 6.0);
+        b.set_at(0, 1, 0.5);
+        b.set_at(1, 0, 0.5);
+    }
+    for p in 0..points {
+        let mut b = h.block_mut::<3, 3>(p, p);
+        for d in 0..3 {
+            b.set_at(d, d, 4.0);
+        }
+        b.set_at(0, 1, 0.25);
+        b.set_at(1, 0, 0.25);
+        // Couple the point to both cameras.
+        for c in 0..cams {
+            let mut cb = h.block_mut::<2, 3>(c, p);
+            cb.set_at(0, 0, 0.5);
+            cb.set_at(1, 1, -0.25);
+            cb.set_at(0, 2, 0.125);
+        }
+    }
+    let dense = h.to_dense();
+    let n = dense.nrows();
+    let b: Vec<f64> = (0..n).map(|i| 0.5 + 0.1 * i as f64).collect();
+    let expected = dense_solve(&dense, &b);
+
+    let mut ldlt = BlockSparseLdlt::<Ba2, f64>::new();
+    assert!(ldlt.analyze(&h, nr));
+    assert!(ldlt.uses_block_schur(), "expected the block Schur path");
+    assert!(ldlt.compute(&h));
+    let mut x = vec![0.0; n];
+    assert!(ldlt.solve_into(&h, &b, &mut x));
+    for (a, e) in x.iter().zip(&expected) {
+        assert_relative_eq!(a, e, epsilon = 1e-9);
+    }
+
+    // Covariance blocks match the dense inverse.
+    let inv = tinyopt::inverse::<f64, Dynamic>(&dense).expect("dense inverse");
+    let s_inv = ldlt.inverse_schur_reduced().expect("reduced inverse");
+    for j in 0..nr {
+        for i in 0..nr {
+            assert_relative_eq!(s_inv.elem(i, j), inv.elem(i, j), epsilon = 1e-9);
+        }
+    }
+    let m = ldlt
+        .marginal_eliminated_block(nr, 3)
+        .expect("eliminated marginal");
+    for j in 0..3 {
+        for i in 0..3 {
+            assert_relative_eq!(m.elem(i, j), inv.elem(nr + i, nr + j), epsilon = 1e-9);
+        }
+    }
+
+    // Coupled eliminated blocks (point-point coupling) fall back to the sparse path.
+    let mut coupled = h.clone();
+    let mut block = coupled.block_mut::<3, 3>(0, 1);
+    block.set_at(0, 0, 0.1);
+    let mut ldlt2 = BlockSparseLdlt::<Ba2, f64>::new();
+    assert!(ldlt2.analyze(&coupled, nr));
+    assert!(!ldlt2.uses_block_schur());
+    assert!(ldlt2.compute(&coupled));
+    let mut x2 = vec![0.0; n];
+    assert!(ldlt2.solve_into(&coupled, &b, &mut x2));
+    let expected2 = {
+        let d = coupled.to_dense();
+        dense_solve(&d, &b)
+    };
+    for (a, e) in x2.iter().zip(&expected2) {
+        assert_relative_eq!(a, e, epsilon = 1e-9);
+    }
+}

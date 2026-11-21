@@ -206,10 +206,11 @@ Implementation notes:
   matching Eigen's AMD default; `Ordering::Natural` disables it. Exactness is
   unaffected. Paths and cycles (maximum degree ≤ 2) skip the ordering step
   since no elimination order can reduce their (zero) fill.
-- `BlockSparseLdlt` uses an exact dense-partition Schur complement (reduced
-  head block + inverted eliminated block). The C++ independent/coupled block
-  elimination and AMD ordering are not implemented; results match, performance
-  differs on large problems.
+- `BlockSparseLdlt` builds the Schur complement with dense per-block operations
+  when the eliminated blocks are independent (`S = H_rr − Σ C_e E_e⁻¹ C_eᵀ`,
+  the bundle-adjustment structure); coupled eliminated blocks fall back to the
+  scalar sparse Schur path. The C++ block AMD ordering, guided ordering and
+  general coupled block elimination are not ported yet.
 - `BlockTridiagLdlt` matches the C++ banded inverse semantics (diagonal and
   first super-diagonal blocks of the covariance).
 - Fixed parameters are masked (row/column zeroing); the dynamic fixed-parameter

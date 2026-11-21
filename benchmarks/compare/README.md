@@ -87,6 +87,10 @@ These are reported in every generated report:
 - **Pose noise**: the Rust generator uses a deterministic local PRNG; the C++
   binary uses `std::mt19937`. Sizes, outlier ratios and noise levels match, the
   draws do not.
+- **Block solver**: tinyopt-rs builds the bundle-adjustment Schur complement
+  with dense per-block operations (independent point blocks); the C++ block
+  engine additionally uses block AMD ordering and a general coupled-block
+  elimination.
 - **1D static**: the C++ tinyopt benchmark *times* a scalar linear cost but
   reports iterations from its quadratic verification run. tinyopt-rs and
   ceres-rs optimize the same quadratic residual for every dense case, so

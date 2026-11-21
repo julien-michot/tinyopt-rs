@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
-use crate::backend::{DenseMatrix, Dynamic, Matrix, zeros_matrix};
+use crate::backend::{DenseMatrix, DenseVector, Dynamic, Matrix, zeros_matrix, zeros_vector};
 use crate::block_tridiag::BlockMut;
 use crate::cost::Cost;
 use crate::covariance::{CovarianceOptions, FinalCovariance};
@@ -309,10 +309,14 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
             (j - col_off) / self.sizes[tb],
             (j - col_off) % self.sizes[tb],
         );
-        let (pair, key, transpose) = if ta <= tb {
+        let (pair, key, transpose) = if ta < tb {
+            (Self::pair_index(ta, tb), (r, c), false)
+        } else if ta > tb {
+            (Self::pair_index(tb, ta), (c, r), true)
+        } else if r <= c {
             (Self::pair_index(ta, tb), (r, c), false)
         } else {
-            (Self::pair_index(tb, ta), (c, r), true)
+            (Self::pair_index(ta, tb), (c, r), true)
         };
         match self.blocks[pair].get(&key) {
             Some(block) => {
@@ -336,13 +340,17 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         let ca = self.sizes[tb];
         let (r, li) = ((i - row_off) / ra, (i - row_off) % ra);
         let (c, lj) = ((j - col_off) / ca, (j - col_off) % ca);
-        let (pair, key, transpose) = if ta <= tb {
+        let (pair, key, transpose) = if ta < tb {
+            (Self::pair_index(ta, tb), (r, c), false)
+        } else if ta > tb {
+            (Self::pair_index(tb, ta), (c, r), true)
+        } else if r <= c {
             (Self::pair_index(ta, tb), (r, c), false)
         } else {
-            (Self::pair_index(tb, ta), (c, r), true)
+            (Self::pair_index(ta, tb), (c, r), true)
         };
-        let rows = if ta <= tb { ra } else { ca };
-        let cols = if ta <= tb { ca } else { ra };
+        let rows = if ta < tb { ra } else { ca };
+        let cols = if ta < tb { ca } else { ra };
         let block = self.blocks[pair]
             .entry(key)
             .or_insert_with(|| vec![S::zero(); rows * cols]);
@@ -497,7 +505,7 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                         for i in 0..ra {
                             if block[j * ra + i] != S::zero() {
                                 counts[col_base + j] += 1;
-                                if a != b {
+                                if a != b || r != c {
                                     counts[row_base + i] += 1;
                                 }
                             }
@@ -535,7 +543,9 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                             pos[col] += 1;
                             row_indices[p] = row_base + i;
                             values[p] = v;
-                            if a != b {
+                            // Mirror off-diagonal blocks (different types or different
+                            // blocks of the same type).
+                            if a != b || r != c {
                                 let col = row_base + i;
                                 let p = pos[col];
                                 pos[col] += 1;
@@ -697,20 +707,70 @@ impl<S: Real> BlockSparseMatX<S> {
     }
 }
 
-// --- LDLT with Schur complement --------------------------------------------
+// --- Block LDLT with Schur complement ---------------------------------------
 
-/// Block-sparse LDLᵀ with a sparse Schur complement on the reduced head block.
+/// Dense inverse of a small column-major block.
+fn inverse_block<S: Real>(block: &[S], size: usize) -> Option<Vec<S>> {
+    let mut m = zeros_matrix::<S, Dynamic>(size, size);
+    for j in 0..size {
+        for i in 0..size {
+            m.set_elem(i, j, block[j * size + i]);
+        }
+    }
+    let inv = crate::backend::inverse::<S, Dynamic>(&m)?;
+    let mut out = vec![S::zero(); size * size];
+    for j in 0..size {
+        for i in 0..size {
+            let v = inv.elem(i, j);
+            if !v.is_finite() {
+                return None;
+            }
+            out[j * size + i] = v;
+        }
+    }
+    Some(out)
+}
+
+/// Dense matrix-vector product with a column-major square block.
+fn block_mat_vec<S: Real>(m: &[S], v: &[S], size: usize) -> Vec<S> {
+    let mut out = vec![S::zero(); size];
+    for i in 0..size {
+        let mut acc = S::zero();
+        for j in 0..size {
+            acc += m[j * size + i] * v[j];
+        }
+        out[i] = acc;
+    }
+    out
+}
+
+#[derive(Clone, Debug)]
+struct EliminatedBlock<S> {
+    start: usize,
+    size: usize,
+    /// Inverse of the diagonal block (`size × size`, column-major).
+    inv: Vec<S>,
+    /// Couplings to reduced blocks: `(reduced scalar start, C)` where `C` is
+    /// `reduced_size × size`, column-major.
+    couplings: Vec<(usize, Vec<S>)>,
+}
+
+/// Block-sparse LDLᵀ with a block Schur complement on the reduced head block.
 ///
-/// The eliminated block is factorized sparsely (AMD ordering by default) and the
-/// reduced system stays dense (`num_reduced²`), mirroring the scalar Schur path
-/// of the C++ solver. Memory is `O(nnz)` instead of the former dense partitions.
+/// When the eliminated blocks are independent (no eliminated-eliminated
+/// coupling, the bundle-adjustment structure), the Schur complement is built
+/// with dense per-block operations: `S = H_rr − Σ C_e E_e⁻¹ C_eᵀ`. Otherwise
+/// the solve falls back to the scalar sparse Schur path.
 #[derive(Clone, Debug)]
 pub struct BlockSparseLdlt<T: BlockTypes, S: Real = f64> {
     num_reduced: usize,
     analyzed: bool,
     computed: bool,
-    solver: SparseLinearSolvers<S>,
-    sparse: SparseMatrix<S>,
+    reduced_types: usize,
+    schur: Option<Vec<S>>,
+    elims: Vec<EliminatedBlock<S>>,
+    fallback: Option<SparseLinearSolvers<S>>,
+    fallback_sparse: SparseMatrix<S>,
     _marker: PhantomData<T>,
 }
 
@@ -727,8 +787,11 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             num_reduced: 0,
             analyzed: false,
             computed: false,
-            solver: SparseLinearSolvers::new(LinearSolverOptions::default()),
-            sparse: SparseMatrix::new(0, 0),
+            reduced_types: 0,
+            schur: None,
+            elims: Vec::new(),
+            fallback: None,
+            fallback_sparse: SparseMatrix::new(0, 0),
             _marker: PhantomData,
         }
     }
@@ -739,32 +802,162 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             self.analyzed = false;
             return false;
         }
-        let mut boundary_ok = num_reduced == 0;
+        let mut reduced_types = None;
         for t in 0..h.num_block_types() {
             if h.base_offset(t) == num_reduced {
-                boundary_ok = true;
+                reduced_types = Some(t);
             }
         }
-        if !boundary_ok {
+        let Some(reduced_types) = reduced_types else {
             self.analyzed = false;
             return false;
-        }
+        };
         self.num_reduced = num_reduced;
-        self.sparse = h.to_sparse();
-        self.analyzed = self.solver.analyze(&self.sparse, num_reduced);
-        self.computed = false;
-        self.analyzed
+        self.reduced_types = reduced_types;
+        self.schur = None;
+        self.elims.clear();
+        self.fallback = None;
+
+        // Block Schur requires independent eliminated blocks.
+        let independent = (reduced_types..h.num_block_types()).all(|a| {
+            (a..h.num_block_types()).all(|b| {
+                let map = &h.blocks[Self::block_pair(a, b)];
+                if map.is_empty() {
+                    return true;
+                }
+                a != b && map.is_empty() || (a == b && map.keys().all(|&(r, c)| r == c))
+            })
+        });
+        self.analyzed = true;
+        if num_reduced == 0 || !independent {
+            // Fallback: scalar sparse Schur (handles coupling and nr == 0).
+            self.fallback_sparse = h.to_sparse();
+            let mut solver = SparseLinearSolvers::new(LinearSolverOptions::default());
+            let ok = solver.analyze(&self.fallback_sparse, num_reduced);
+            self.fallback = if ok { Some(solver) } else { None };
+            return ok;
+        }
+        true
     }
 
-    /// Numeric factorization, reusing the analyzed pattern.
+    fn block_pair(a: usize, b: usize) -> usize {
+        let nt = T::SIZES.len();
+        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        lo * nt - lo * lo.saturating_sub(1) / 2 + (hi - lo)
+    }
+
+    /// Numeric factorization.
     pub fn compute(&mut self, h: &BlockSparseMat<T, S>) -> bool {
         if !self.analyzed {
             return false;
         }
-        // Refresh the values; the sparsity pattern is unchanged by the optimizer.
-        self.sparse = h.to_sparse();
-        self.computed = self.solver.compute(&self.sparse);
-        self.computed
+        self.computed = false;
+        if let Some(solver) = self.fallback.as_mut() {
+            self.fallback_sparse = h.to_sparse();
+            self.computed = solver.compute(&self.fallback_sparse);
+            return self.computed;
+        }
+
+        let nr = self.num_reduced;
+        let nt = T::SIZES.len();
+        let rt = self.reduced_types;
+        let mut schur = vec![S::zero(); nr * nr];
+
+        // Reduced-reduced blocks (both triangles).
+        for a in 0..rt {
+            for b in a..rt {
+                let (ra, ca) = (T::SIZES[a], T::SIZES[b]);
+                let (oa, ob) = (h.base_offset(a), h.base_offset(b));
+                for (&(r, c), block) in &h.blocks[Self::block_pair(a, b)] {
+                    let (key, transpose) = if a == b && r > c {
+                        ((c, r), true)
+                    } else {
+                        ((r, c), false)
+                    };
+                    if let Some(data) = h.blocks[Self::block_pair(a, b)].get(&key) {
+                        let rows = if transpose { ca } else { ra };
+                        let row0 = oa + r * ra;
+                        let col0 = ob + c * ca;
+                        for j in 0..ca {
+                            for i in 0..ra {
+                                let v = if transpose {
+                                    data[i * rows + j]
+                                } else {
+                                    data[j * rows + i]
+                                };
+                                schur[(col0 + j) * nr + row0 + i] = v;
+                                schur[(row0 + i) * nr + col0 + j] = v;
+                            }
+                        }
+                    }
+                    let _ = block;
+                }
+            }
+        }
+
+        // Eliminated blocks: invert and accumulate C E^{-1} C^T.
+        self.elims.clear();
+        for te in rt..nt {
+            let k = T::SIZES[te];
+            let base = h.base_offset(te);
+            for be in 0..h.counts[te] {
+                let start = base + be * k;
+                let pair = Self::block_pair(te, te);
+                let e = match h.blocks[pair].get(&(be, be)) {
+                    Some(block) => block.clone(),
+                    None => return false,
+                };
+                let Some(inv) = inverse_block(&e, k) else {
+                    return false;
+                };
+                let mut couplings = Vec::new();
+                for tr in 0..rt {
+                    let rs = T::SIZES[tr];
+                    let pair = Self::block_pair(tr, te);
+                    for br in 0..h.counts[tr] {
+                        if let Some(c) = h.blocks[pair].get(&(br, be)) {
+                            if c.iter().any(|v| *v != S::zero()) {
+                                couplings.push((h.base_offset(tr) + br * rs, c.clone()));
+                            }
+                        }
+                    }
+                }
+                // S(r1, r2) -= C1 E^{-1} C2^T.
+                for (i, coupling_i) in couplings.iter().enumerate() {
+                    let (r0, c0) = (&coupling_i.0, &coupling_i.1);
+                    let rs0 = c0.len() / k;
+                    let t0 = block_mat_mul_inv(c0, &inv, rs0, k);
+                    for (j, coupling_j) in couplings.iter().enumerate().skip(i) {
+                        let (r1, c1) = (&coupling_j.0, &coupling_j.1);
+                        let rs1 = c1.len() / k;
+                        for a in 0..rs0 {
+                            for b in 0..rs1 {
+                                let mut acc = S::zero();
+                                for q in 0..k {
+                                    acc += t0[q * rs0 + a] * c1[q * rs1 + b];
+                                }
+                                schur[(r0 + a) * nr + r1 + b] -= acc;
+                                // Mirror across coupling blocks only: for the same
+                                // block the (a, b) loops already cover both triangles.
+                                if i != j {
+                                    schur[(*r1 + b) * nr + (r0 + a)] -= acc;
+                                }
+                            }
+                        }
+                    }
+                }
+                self.elims.push(EliminatedBlock {
+                    start,
+                    size: k,
+                    inv,
+                    couplings,
+                });
+            }
+        }
+
+        self.schur = Some(schur);
+        self.computed = true;
+        true
     }
 
     /// Solve `H x = rhs` into `out`.
@@ -772,7 +965,16 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         if !self.computed {
             return false;
         }
-        match self.solver.solve(&self.sparse, rhs) {
+        if let Some(solver) = &self.fallback {
+            return match solver.solve(&self.fallback_sparse, rhs) {
+                Some(x) => {
+                    out.copy_from_slice(&x);
+                    true
+                }
+                None => false,
+            };
+        }
+        match self.solve_rhs(rhs) {
             Some(x) => {
                 out.copy_from_slice(&x);
                 true
@@ -781,37 +983,104 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         }
     }
 
-    /// Inverse of the reduced Schur block (top-left block of `H⁻¹`).
-    pub fn inverse_schur_reduced(&self) -> Option<Matrix<S, Dynamic>> {
-        self.inverse_block(0, self.num_reduced)
+    fn solve_rhs(&self, rhs: &[S]) -> Option<Vec<S>> {
+        let nr = self.num_reduced;
+        let schur = self.schur.as_ref()?;
+        let mut reduced_rhs = zeros_vector::<S, Dynamic>(nr);
+        for (i, value) in rhs.iter().enumerate().take(nr) {
+            reduced_rhs.set_at(i, *value);
+        }
+        let mut ys = Vec::with_capacity(self.elims.len());
+        for e in &self.elims {
+            let y = block_mat_vec(&e.inv, &rhs[e.start..e.start + e.size], e.size);
+            for (r0, c) in &e.couplings {
+                let rs = c.len() / e.size;
+                for i in 0..rs {
+                    let mut acc = S::zero();
+                    for j in 0..e.size {
+                        acc += c[j * rs + i] * y[j];
+                    }
+                    reduced_rhs.set_at(r0 + i, reduced_rhs.at(r0 + i) - acc);
+                }
+            }
+            ys.push(y);
+        }
+        let mut dense = zeros_matrix::<S, Dynamic>(nr, nr);
+        for j in 0..nr {
+            for i in 0..nr {
+                dense.set_elem(i, j, schur[j * nr + i]);
+            }
+        }
+        let xr = crate::backend::solve::<S, Dynamic>(
+            crate::backend::LinearSolverMethod::Ldlt,
+            &dense,
+            &reduced_rhs,
+        )?;
+
+        let mut out = vec![S::zero(); rhs.len()];
+        for (i, value) in out.iter_mut().enumerate().take(nr) {
+            *value = xr.at(i);
+        }
+        for (e, y) in self.elims.iter().zip(ys) {
+            let mut t = vec![S::zero(); e.size];
+            for (r0, c) in &e.couplings {
+                let rs = c.len() / e.size;
+                for j in 0..e.size {
+                    let mut acc = S::zero();
+                    for i in 0..rs {
+                        acc += c[j * rs + i] * xr.at(r0 + i);
+                    }
+                    t[j] += acc;
+                }
+            }
+            let corr = block_mat_vec(&e.inv, &t, e.size);
+            for j in 0..e.size {
+                out[e.start + j] = y[j] - corr[j];
+            }
+        }
+        out.iter().all(|v| v.is_finite()).then_some(out)
     }
 
-    /// Marginal covariance of one eliminated block (top-left block of `H⁻¹`).
+    /// Inverse of the reduced Schur block (top-left block of `H⁻¹`).
+    pub fn inverse_schur_reduced(&self) -> Option<Matrix<S, Dynamic>> {
+        let schur = self.schur.as_ref()?;
+        let nr = self.num_reduced;
+        let mut dense = zeros_matrix::<S, Dynamic>(nr, nr);
+        for j in 0..nr {
+            for i in 0..nr {
+                dense.set_elem(i, j, schur[j * nr + i]);
+            }
+        }
+        crate::backend::inverse::<S, Dynamic>(&dense)
+    }
+
+    /// Marginal covariance of one eliminated block (the matching block of `H⁻¹`).
     pub fn marginal_eliminated_block(
         &self,
         elim_start: usize,
         elim_size: usize,
     ) -> Option<Matrix<S, Dynamic>> {
-        self.inverse_block(elim_start, elim_size)
-    }
-
-    /// Inverse of the diagonal block `H[start..start+size, start..start+size]`.
-    fn inverse_block(&self, start: usize, size: usize) -> Option<Matrix<S, Dynamic>> {
-        if !self.computed || size == 0 || start + size > self.sparse.nrows() {
+        if !self.computed {
             return None;
         }
-        let n = self.sparse.nrows();
-        let mut out = zeros_matrix::<S, Dynamic>(size, size);
-        let mut e = vec![S::zero(); n];
-        for j in 0..size {
-            e[start + j] = S::one();
-            let x = self.solver.solve(&self.sparse, &e)?;
-            e[start + j] = S::zero();
-            for i in 0..size {
-                out.set_elem(i, j, x[start + i]);
+        let n = self.num_reduced + self.elims.iter().map(|e| e.size).sum::<usize>();
+        let mut out = zeros_matrix::<S, Dynamic>(elim_size, elim_size);
+        let mut rhs = vec![S::zero(); n];
+        for j in 0..elim_size {
+            rhs[elim_start + j] = S::one();
+            let x = self.solve_rhs(&rhs)?;
+            rhs[elim_start + j] = S::zero();
+            for i in 0..elim_size {
+                out.set_elem(i, j, x[elim_start + i]);
             }
         }
         Some(out)
+    }
+
+    /// Whether the block Schur path is in use (as opposed to the sparse
+    /// fallback for coupled eliminated blocks).
+    pub fn uses_block_schur(&self) -> bool {
+        self.analyzed && self.fallback.is_none() && self.num_reduced > 0
     }
 
     /// Whether the factorization is available.
@@ -823,6 +1092,21 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
     pub fn num_reduced(&self) -> usize {
         self.num_reduced
     }
+}
+
+/// `C * E^{-1}` for a `rows × k` coupling block `C` (column-major).
+fn block_mat_mul_inv<S: Real>(c: &[S], inv: &[S], rows: usize, k: usize) -> Vec<S> {
+    let mut out = vec![S::zero(); rows * k];
+    for q in 0..k {
+        for i in 0..rows {
+            let mut acc = S::zero();
+            for p in 0..k {
+                acc += c[p * rows + i] * inv[q * k + p];
+            }
+            out[q * rows + i] = acc;
+        }
+    }
+    out
 }
 
 // --- HessianStorage implementation -----------------------------------------
@@ -868,20 +1152,17 @@ impl<T: BlockTypes, S: Real> HessianStorage<S> for BlockSparseMat<T, S> {
         BlockSparseMat::mul_vec_into(self, x, out);
     }
 
-    type SolverCache = crate::sparse::SparseSolverCache<S>;
+    type SolverCache = BlockSparseLdlt<T, S>;
 
     fn solve_into(
         &self,
-        options: &LinearSolverOptions,
+        _options: &LinearSolverOptions,
         rhs: &[S],
         num_reduced: usize,
         out: &mut [S],
-        cache: &mut crate::sparse::SparseSolverCache<S>,
+        cache: &mut BlockSparseLdlt<T, S>,
     ) -> bool {
-        // Convert once per solve; the symbolic analysis is reused when the
-        // sparsity pattern is unchanged.
-        let sparse = self.to_sparse();
-        cache.solve_into(&sparse, options, rhs, num_reduced, out)
+        cache.analyze(self, num_reduced) && cache.compute(self) && cache.solve_into(self, rhs, out)
     }
 
     fn to_dense(&self) -> Matrix<S, Dynamic> {
