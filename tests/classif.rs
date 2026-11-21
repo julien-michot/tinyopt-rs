@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/classif.cpp: softmax values and Jacobians.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::diff::{Method, estimate_num_jac};
-use tinyopt_rs::losses::{safe_softmax, safe_softmax_with_jac, softmax, softmax_with_jac};
+use tinyopt::diff::{Method, estimate_num_jac};
+use tinyopt::losses::{safe_softmax, safe_softmax_with_jac, softmax, softmax_with_jac};
 
 fn num_grad(f: impl Fn(&[f64]) -> f64, x: &[f64]) -> Vec<f64> {
     estimate_num_jac(x, &|xx: &[f64]| vec![f(xx)], Method::Central, 1e-6)

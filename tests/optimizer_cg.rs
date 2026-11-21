@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/optimizer_cg.cpp.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Solver, Static, optimize};
+use tinyopt::backend::{DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Solver, Static, optimize};
 
 type V1 = Vector<f64, Static<1>>;
 type V2 = Vector<f64, Static<2>>;
@@ -93,7 +93,7 @@ fn conjugate_gradient_dispatch_two_dimensional() {
 
 #[test]
 fn conjugate_gradient_dynamic_regression() {
-    use tinyopt_rs::Dynamic;
+    use tinyopt::Dynamic;
     type Vx = Vector<f64, Dynamic>;
     type Mx = Matrix<f64, Dynamic>;
     let target = [2.0, -3.0];

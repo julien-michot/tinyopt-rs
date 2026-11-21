@@ -5,10 +5,10 @@
 //! Mirrors tests/cpp/block_sparse_dynamic.cpp.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Dynamic, Vector};
-use tinyopt_rs::block_sparse::BlockSparseMatX;
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{Cost, Options, Params};
+use tinyopt::backend::{DenseMatrix, DenseVector, Dynamic, Vector};
+use tinyopt::block_sparse::BlockSparseMatX;
+use tinyopt::optimizers::lm;
+use tinyopt::{Cost, Options, Params};
 
 type Vx = Vector<f64, Dynamic>;
 const TARGET: [f64; 5] = [1.0, 2.0, 3.0, 4.0, 5.0];
@@ -123,7 +123,7 @@ fn dynamic_block_sparse_covariance() {
     let summary = opt.optimize(&mut x, dynamic_acc);
     assert!(summary.succeeded());
     match summary.final_cov.as_ref().expect("covariance") {
-        tinyopt_rs::FinalCovariance::BlockSparse(m) => {
+        tinyopt::FinalCovariance::BlockSparse(m) => {
             assert_eq!(m.dims(), 5);
             assert!(m.get(0, 0) > 0.0);
         }

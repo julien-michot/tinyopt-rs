@@ -5,8 +5,8 @@
 //! Mirrors tests/cpp/types_scalar_stl.cpp: scalars, arrays, and `Vec` parameters.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::diff::{DualNum, ResidualsFn};
-use tinyopt_rs::{Options, Params, optimize_residuals};
+use tinyopt::diff::{DualNum, ResidualsFn};
+use tinyopt::{Options, Params, optimize_residuals};
 
 struct Sqrt2;
 impl ResidualsFn for Sqrt2 {

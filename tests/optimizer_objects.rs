@@ -5,9 +5,9 @@
 //! objects, reuse, and options.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::optimizers::{gn, lm};
-use tinyopt_rs::{Cost, Options, Static};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::optimizers::{gn, lm};
+use tinyopt::{Cost, Options, Static};
 
 type V1 = Vector<f64, Static<1>>;
 type M1 = Matrix<f64, Static<1>>;
@@ -43,7 +43,7 @@ fn lm_optimizer_object() {
 
 #[test]
 fn gn_optimizer_object() {
-    let mut opt = gn::Optimizer::<V1>::new(Options::new(tinyopt_rs::Solver::GaussNewton));
+    let mut opt = gn::Optimizer::<V1>::new(Options::new(tinyopt::Solver::GaussNewton));
     let mut x = scalar(0.0);
     let summary = opt.optimize(&mut x, quadratic_acc());
     assert!(summary.succeeded(), "{:?}", summary.stop_reason);

@@ -10,7 +10,7 @@
 use crate::backend::{Dim, Dynamic, Static};
 use crate::real::Real;
 
-/// A type that can be optimized by tinyopt-rs.
+/// A type that can be optimized by tinyopt.
 ///
 /// Implement this trait to optimize custom parameter types (for instance
 /// Lie-group elements with a manifold retraction in [`Params::plus_eq`]).

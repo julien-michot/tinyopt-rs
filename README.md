@@ -1,4 +1,4 @@
-# tinyopt-rs
+# tinyopt
 
 A lightweight, Rust native optimization library for unconstrained optimization and
 non-linear least squares on **dense** systems — the Rust counterpart of
@@ -35,7 +35,7 @@ User functions are generic over the scalar, so a single implementation serves bo
 plain evaluation and autodiff:
 
 ```rust
-use tinyopt_rs::diff::{DualNum, ResidualsFn};
+use tinyopt::diff::{DualNum, ResidualsFn};
 
 struct Sqrt2;
 
@@ -51,9 +51,9 @@ impl ResidualsFn for Sqrt2 {
 ## Quick start
 
 ```rust
-use tinyopt_rs::backend::{DenseVector, Vector};
-use tinyopt_rs::diff::{DualNum, ResidualsFn};
-use tinyopt_rs::{Options, Static, optimize_residuals};
+use tinyopt::backend::{DenseVector, Vector};
+use tinyopt::diff::{DualNum, ResidualsFn};
+use tinyopt::{Options, Static, optimize_residuals};
 
 struct Sqrt2;
 
@@ -87,8 +87,8 @@ assert!(summary.converged());
 ## Losses and distances
 
 ```rust
-use tinyopt_rs::losses::{huber, huber_loss, cauchy_loss, maha_whitened_cov};
-use tinyopt_rs::distances::{euclidean, euclidean_with_jac};
+use tinyopt::losses::{huber, huber_loss, cauchy_loss, maha_whitened_cov};
+use tinyopt::distances::{euclidean, euclidean_with_jac};
 ```
 
 Classical norms (`squared_l2`, `l2`, `l1`, `linf`), robust M-estimators
@@ -99,8 +99,8 @@ activations, softmax and vector distances are all available.
 ## Fixed parameters, covariance and multiple parameters
 
 ```rust
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{CovarianceOptions, Options};
+use tinyopt::optimizers::lm;
+use tinyopt::{CovarianceOptions, Options};
 
 let mut opt = lm::Optimizer::<Vec2>::new(Options::default());
 opt.fix(&[1]);                       // hold parameter 1 fixed
@@ -117,14 +117,14 @@ Scalar sparse Hessians, block-tridiagonal Hessians and compile-time block-sparse
 Hessians share the same optimizer API:
 
 ```rust
-use tinyopt_rs::sparse::SparseMat;
-use tinyopt_rs::{Options, optimize_sparse};
+use tinyopt::sparse::SparseMat;
+use tinyopt::{Options, optimize_sparse};
 
 let mut x = vec![0.0_f64; 5];
 let summary = optimize_sparse(&mut x, |x, grad, h| {
     // grad: Option<&mut Vector<f64, Dynamic>>
     // h:    Option<&mut SparseMat> (triplets or coeff_ref)
-    tinyopt_rs::Cost::with_num_residuals(0.0, 1)
+    tinyopt::Cost::with_num_residuals(0.0, 1)
 }, &Options::default());
 ```
 

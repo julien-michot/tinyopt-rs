@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Static, StopReason, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Static, StopReason, optimize};
 
 type V1 = Vector<f64, Static<1>>;
 type M1 = Matrix<f64, Static<1>>;

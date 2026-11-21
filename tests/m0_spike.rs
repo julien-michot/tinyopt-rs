@@ -6,11 +6,11 @@
 //! (optionally) num-dual autodiff.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{
+use tinyopt::backend::{
     DenseMatrix, DenseVector, Dim, LinearSolverMethod, Matrix, Vector, inverse, solve,
     zeros_matrix, zeros_vector,
 };
-use tinyopt_rs::{Dynamic, Params, Static};
+use tinyopt::{Dynamic, Params, Static};
 
 type V3 = Vector<f64, Static<3>>;
 type M3 = Matrix<f64, Static<3>>;
@@ -207,7 +207,7 @@ fn params_static_and_dynamic() {
 #[cfg(feature = "autodiff")]
 mod autodiff_spike {
     use super::*;
-    use tinyopt_rs::diff::{DualNum, ResidualsAndJacobian, ResidualsFn, residuals_and_jacobian};
+    use tinyopt::diff::{DualNum, ResidualsAndJacobian, ResidualsFn, residuals_and_jacobian};
 
     /// r(x) = [x0^2 + x1^2 - 2, x0 - x1]
     struct CircleLine;

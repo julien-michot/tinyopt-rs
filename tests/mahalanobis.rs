@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/mahalanobis.cpp (dense parts).
 
 use approx::assert_relative_eq;
-use tinyopt_rs::diff::{Method, estimate_num_jac};
-use tinyopt_rs::losses::{
+use tinyopt::diff::{Method, estimate_num_jac};
+use tinyopt::losses::{
     maha_norm_cov, maha_norm_cov_with_jac, maha_norm_scalar, maha_norm_vars, maha_squared_norm_cov,
     maha_squared_norm_scalar, maha_squared_norm_vars, maha_whitened_cov, maha_whitened_info_u,
     maha_whitened_scalar, maha_whitened_vars,

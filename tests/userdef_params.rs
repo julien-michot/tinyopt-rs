@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/userdef_params.cpp: custom parameter types.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Params, Static, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Params, Static, optimize};
 
 type V2 = Vector<f64, Static<2>>;
 type M2 = Matrix<f64, Static<2>>;
@@ -74,7 +74,7 @@ struct DynamicBox {
 
 impl Params for DynamicBox {
     type Scalar = f64;
-    type Dim = tinyopt_rs::Dynamic;
+    type Dim = tinyopt::Dynamic;
 
     fn dims(&self) -> usize {
         self.values.len()
@@ -97,7 +97,7 @@ impl Params for DynamicBox {
 
 #[test]
 fn dynamic_custom_parameters() {
-    use tinyopt_rs::Dynamic;
+    use tinyopt::Dynamic;
     type Vx = Vector<f64, Dynamic>;
     type Mx = Matrix<f64, Dynamic>;
 

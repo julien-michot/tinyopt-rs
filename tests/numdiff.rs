@@ -5,11 +5,11 @@
 //! accumulators and gradient checks.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::diff::{
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::diff::{
     Method, create_num_diff_cost_func, create_num_diff_func, estimate_num_jac, num_eval,
 };
-use tinyopt_rs::{AccumulationFn, Cost, Options, Static, optimize};
+use tinyopt::{AccumulationFn, Cost, Options, Static, optimize};
 
 type V1 = Vector<f64, Static<1>>;
 type M1 = Matrix<f64, Static<1>>;

@@ -8,13 +8,13 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use tinyopt_rs::backend::{DenseVector, Dynamic, Vector};
-use tinyopt_rs::block_sparse::BlockSparseMat;
-use tinyopt_rs::block_sparse_types;
-use tinyopt_rs::block_tridiag::BlockTridiagMat;
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::sparse::SparseMat;
-use tinyopt_rs::{Cost, Options, Ordering, Params, optimize_tridiag};
+use tinyopt::backend::{DenseVector, Dynamic, Vector};
+use tinyopt::block_sparse::BlockSparseMat;
+use tinyopt::block_sparse_types;
+use tinyopt::block_tridiag::BlockTridiagMat;
+use tinyopt::optimizers::lm;
+use tinyopt::sparse::SparseMat;
+use tinyopt::{Cost, Options, Ordering, Params, optimize_tridiag};
 
 type Vx = Vector<f64, Dynamic>;
 
@@ -257,8 +257,8 @@ fn block_sparse_ba(c: &mut Criterion) {
 
 /// Symbolic + numeric LDLᵀ on a star graph whose natural ordering is dense.
 fn sparse_ordering(c: &mut Criterion) {
-    use tinyopt_rs::Ordering;
-    use tinyopt_rs::sparse::{SimplicialLdl, SparseMatrix};
+    use tinyopt::Ordering;
+    use tinyopt::sparse::{SimplicialLdl, SparseMatrix};
 
     for n in [200usize, 800] {
         let mut triplets = Vec::new();

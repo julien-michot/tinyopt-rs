@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/params_wrapper.cpp: wrapping a manifold-like parameter.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Params, ParamsWrapper, Static};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Params, ParamsWrapper, Static};
 
 type V3 = Vector<f64, Static<3>>;
 type M3 = Matrix<f64, Static<3>>;
@@ -90,7 +90,7 @@ fn wrapper_delegates_params_trait() {
 #[test]
 fn optimize_wrapped_manifold() {
     let mut wrapped = ParamsWrapper::new(Pose2::new(0.0, 0.0, 0.0));
-    let summary = tinyopt_rs::optimize(&mut wrapped, residuals(), &Options::default());
+    let summary = tinyopt::optimize(&mut wrapped, residuals(), &Options::default());
     assert!(summary.succeeded(), "{:?}", summary.stop_reason);
     assert_relative_eq!(wrapped.value.data[0], 1.0, epsilon = 1e-8);
     assert_relative_eq!(wrapped.value.data[1], -2.0, epsilon = 1e-8);

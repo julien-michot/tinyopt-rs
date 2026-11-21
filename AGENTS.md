@@ -1,6 +1,6 @@
-# AGENTS.md — Development Guidelines for tinyopt-rs
+# AGENTS.md — Development Guidelines for tinyopt
 
-`tinyopt-rs` is the Rust native counterpart of the C++ `tinyopt` library
+`tinyopt` is the Rust native counterpart of the C++ `tinyopt` library
 (version parity 0.8.0), focused on **dense** systems.
 
 > **CRITICAL AGENT COMMIT POLICY**: AI agents must **never** create git commits

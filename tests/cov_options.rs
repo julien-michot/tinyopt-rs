@@ -4,9 +4,9 @@
 //! Mirrors tests/cpp/cov_options.cpp (dense parts).
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{Cost, CovarianceOptions, Options, Static};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::optimizers::lm;
+use tinyopt::{Cost, CovarianceOptions, Options, Static};
 
 type V2 = Vector<f64, Static<2>>;
 type M2 = Matrix<f64, Static<2>>;

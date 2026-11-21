@@ -7,9 +7,9 @@
 //! are the reduced head block and three landmarks (3 parameters each) are the
 //! eliminated block.
 
-use tinyopt_rs::backend::{DenseVector, Dynamic, Vector};
-use tinyopt_rs::sparse::SparseMat;
-use tinyopt_rs::{Cost, Options, Params, Solver, optimize_sparse};
+use tinyopt::backend::{DenseVector, Dynamic, Vector};
+use tinyopt::sparse::SparseMat;
+use tinyopt::{Cost, Options, Params, Solver, optimize_sparse};
 
 type Vx = Vector<f64, Dynamic>;
 

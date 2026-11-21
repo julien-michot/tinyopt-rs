@@ -4,9 +4,9 @@
 //! Mirrors tests/cpp/optimizer_bfgs.cpp and solver_bfgs.cpp.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::optimizers::{bfgs, lbfgs};
-use tinyopt_rs::{Cost, Options, Solver, Static, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::optimizers::{bfgs, lbfgs};
+use tinyopt::{Cost, Options, Solver, Static, optimize};
 
 type V2 = Vector<f64, Static<2>>;
 type M2 = Matrix<f64, Static<2>>;

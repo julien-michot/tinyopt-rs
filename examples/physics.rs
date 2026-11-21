@@ -8,10 +8,10 @@
 
 mod common;
 
-use tinyopt_rs::backend::{DenseVector, Vector};
-use tinyopt_rs::diff::{DualNum, ResidualsFn, ad_accumulation};
-use tinyopt_rs::optimizers::dl;
-use tinyopt_rs::{Options, Static};
+use tinyopt::backend::{DenseVector, Vector};
+use tinyopt::diff::{DualNum, ResidualsFn, ad_accumulation};
+use tinyopt::optimizers::dl;
+use tinyopt::{Options, Static};
 
 type V4 = Vector<f64, Static<4>>;
 

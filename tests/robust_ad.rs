@@ -6,9 +6,9 @@
 //! `Residuals(losses::Huber(res, delta), ...)` tuple API.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::DenseVector;
-use tinyopt_rs::diff::{DualNum, ResidualBlock, RobustResidualsFn, robust_accumulation};
-use tinyopt_rs::{
+use tinyopt::backend::DenseVector;
+use tinyopt::diff::{DualNum, ResidualBlock, RobustResidualsFn, robust_accumulation};
+use tinyopt::{
     AccumulationFn, Dynamic, Options, Static, optimize_residuals, optimize_robust_residuals,
 };
 
@@ -34,7 +34,7 @@ struct PlainMean {
     points: Vec<f64>,
 }
 
-impl tinyopt_rs::diff::ResidualsFn for PlainMean {
+impl tinyopt::diff::ResidualsFn for PlainMean {
     type Scalar = f64;
 
     fn eval<T: DualNum<Primitive = f64>>(&self, x: &[T]) -> Vec<T> {
@@ -99,10 +99,10 @@ fn robust_accumulator_matches_manual_weighting() {
         }
     }
 
-    type V2 = tinyopt_rs::backend::Vector<f64, Static<2>>;
+    type V2 = tinyopt::backend::Vector<f64, Static<2>>;
     let acc = robust_accumulation(&One);
     let x = [3.0_f64, 4.0];
-    let mut g = <V2 as tinyopt_rs::backend::DenseVector<f64>>::zeros(2);
+    let mut g = <V2 as tinyopt::backend::DenseVector<f64>>::zeros(2);
     let cost = AccumulationFn::<f64, Static<2>>::eval(&acc, &x, Some(&mut g), None);
 
     // ||x|| = 5, weight = 1/5, J = I -> grad = x / 5.
@@ -114,12 +114,12 @@ fn robust_accumulator_matches_manual_weighting() {
 
 #[test]
 fn robust_accumulator_dynamic() {
-    type Vx = tinyopt_rs::backend::Vector<f64, Dynamic>;
+    type Vx = tinyopt::backend::Vector<f64, Dynamic>;
     let points = vec![0.0, 0.0, 0.0, 50.0];
     let f = RobustMean { points, delta: 1.0 };
     let acc = robust_accumulation(&f);
     let x = [0.5];
-    let mut g = <Vx as tinyopt_rs::backend::DenseVector<f64>>::zeros(1);
+    let mut g = <Vx as tinyopt::backend::DenseVector<f64>>::zeros(1);
     let cost = AccumulationFn::<f64, Dynamic>::eval(&acc, &x, Some(&mut g), None);
     assert!(cost.is_valid());
     assert!(g.at(0).is_finite());

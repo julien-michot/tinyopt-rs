@@ -1,7 +1,7 @@
 // Copyright 2026 Julien Michot.
 // SPDX-License-Identifier: Apache-2.0
 
-//! # tinyopt-rs
+//! # tinyopt
 //!
 //! A lightweight, Rust native optimization library for unconstrained
 //! optimization and non-linear least squares (NLLS), focused on dense systems.
@@ -28,8 +28,8 @@
 //! ## Example
 //!
 //! ```no_run
-//! use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-//! use tinyopt_rs::{Cost, Options, Static, optimize};
+//! use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+//! use tinyopt::{Cost, Options, Static, optimize};
 //!
 //! type Vec2 = Vector<f64, Static<2>>;
 //! type Mat2 = Matrix<f64, Static<2>>;
@@ -53,7 +53,7 @@
 //!     Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
 //! };
 //!
-//! let mut x = <Vec2 as tinyopt_rs::backend::DenseVector<f64>>::zeros(2);
+//! let mut x = <Vec2 as tinyopt::backend::DenseVector<f64>>::zeros(2);
 //! x.set_at(0, 1.0);
 //! x.set_at(1, 1.0);
 //! let summary = optimize(&mut x, acc, &Options::default());

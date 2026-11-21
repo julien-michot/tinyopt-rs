@@ -4,9 +4,9 @@
 //! AMD ordering tests (M7): exactness and fill-in reduction.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::Ordering;
-use tinyopt_rs::backend::{DenseVector, Dynamic, LinearSolverMethod, zeros_vector};
-use tinyopt_rs::sparse::{SimplicialLdl, SparseMatrix};
+use tinyopt::Ordering;
+use tinyopt::backend::{DenseVector, Dynamic, LinearSolverMethod, zeros_vector};
+use tinyopt::sparse::{SimplicialLdl, SparseMatrix};
 
 /// Star graph: node 0 connected to every leaf, plus a dominant diagonal.
 fn star_spd(n: usize) -> SparseMatrix<f64> {
@@ -28,7 +28,7 @@ fn dense_solve(a: &SparseMatrix<f64>, b: &[f64]) -> Vec<f64> {
     for (i, v) in b.iter().enumerate() {
         rhs.set_at(i, *v);
     }
-    let x = tinyopt_rs::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &m, &rhs)
+    let x = tinyopt::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &m, &rhs)
         .expect("dense solve");
     (0..n).map(|i| x.at(i)).collect()
 }
@@ -86,11 +86,11 @@ fn sparse_solver_ordering_option() {
     let b: Vec<f64> = (0..16).map(|i| 1.0 + i as f64).collect();
     let expected = dense_solve(&a, &b);
     for ordering in [Ordering::Natural, Ordering::Amd] {
-        let options = tinyopt_rs::options::LinearSolverOptions {
+        let options = tinyopt::options::LinearSolverOptions {
             ordering,
             ..Default::default()
         };
-        let mut solver = tinyopt_rs::sparse::SparseLinearSolvers::<f64>::new(options);
+        let mut solver = tinyopt::sparse::SparseLinearSolvers::<f64>::new(options);
         assert!(solver.analyze(&a, 0));
         assert!(solver.compute(&a));
         let x = solver.solve(&a, &b).expect("solve");

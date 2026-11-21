@@ -6,10 +6,10 @@
 //!
 //! Mirrors `examples/cpp/biology.cpp`.
 
-use tinyopt_rs::backend::{DenseVector, Vector};
-use tinyopt_rs::diff::{CostFn, DualNum, cost_accumulation};
-use tinyopt_rs::optimizers::bfgs;
-use tinyopt_rs::{Options, Static};
+use tinyopt::backend::{DenseVector, Vector};
+use tinyopt::diff::{CostFn, DualNum, cost_accumulation};
+use tinyopt::optimizers::bfgs;
+use tinyopt::{Options, Static};
 
 type V2 = Vector<f64, Static<2>>;
 

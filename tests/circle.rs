@@ -6,9 +6,9 @@
 //! points using autodiff residuals and Levenberg-Marquardt.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseVector, Vector};
-use tinyopt_rs::diff::{DualNum, ResidualsFn, residuals_and_jacobian};
-use tinyopt_rs::{Options, Static, optimize_residuals};
+use tinyopt::backend::{DenseVector, Vector};
+use tinyopt::diff::{DualNum, ResidualsFn, residuals_and_jacobian};
+use tinyopt::{Options, Static, optimize_residuals};
 
 type V3 = Vector<f64, Static<3>>;
 

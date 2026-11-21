@@ -6,11 +6,11 @@
 //! cov_options}.cpp.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Dynamic, Matrix, Vector, zeros_vector};
-use tinyopt_rs::hessian::HessianStorage;
-use tinyopt_rs::optimizers::{gn, lm};
-use tinyopt_rs::sparse::SparseMat;
-use tinyopt_rs::{Cost, CovariancePattern, Options, Params, Summary, optimize_sparse};
+use tinyopt::backend::{DenseMatrix, DenseVector, Dynamic, Matrix, Vector, zeros_vector};
+use tinyopt::hessian::HessianStorage;
+use tinyopt::optimizers::{gn, lm};
+use tinyopt::sparse::SparseMat;
+use tinyopt::{Cost, CovariancePattern, Options, Params, Summary, optimize_sparse};
 
 type VX = Vector<f64, Dynamic>;
 
@@ -129,7 +129,7 @@ fn schur_can_be_disabled() {
     options.linear.allow_schur = false;
     let mut x = initial();
     let summary = optimize_sparse(&mut x, sparse_acc, &options);
-    assert_eq!(summary.stop_reason, tinyopt_rs::StopReason::SolverFailed);
+    assert_eq!(summary.stop_reason, tinyopt::StopReason::SolverFailed);
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn sparse_covariance_auto_and_dense_match() {
         }
     }
     let dense = h.to_dense();
-    let inv = tinyopt_rs::backend::inverse::<f64, Dynamic>(&dense).expect("invertible");
+    let inv = tinyopt::backend::inverse::<f64, Dynamic>(&dense).expect("invertible");
     for i in 0..5 {
         assert_relative_eq!(cov.elem(i, i), inv.elem(i, i) as f32, epsilon = 1e-5);
     }

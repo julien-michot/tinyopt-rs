@@ -6,14 +6,14 @@
 
 use approx::assert_relative_eq;
 #[cfg(feature = "autodiff")]
-use tinyopt_rs::AccumulationFn;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::AccumulationFn;
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
 #[cfg(feature = "autodiff")]
-use tinyopt_rs::diff::{DualNum, ResidualsFn};
-use tinyopt_rs::diff::{Method, check_gradient, check_residuals_gradient};
+use tinyopt::diff::{DualNum, ResidualsFn};
+use tinyopt::diff::{Method, check_gradient, check_residuals_gradient};
 #[cfg(feature = "autodiff")]
-use tinyopt_rs::optimize_residuals;
-use tinyopt_rs::{Cost, Options, Params, Solver, Static, optimize};
+use tinyopt::optimize_residuals;
+use tinyopt::{Cost, Options, Params, Solver, Static, optimize};
 
 type V1 = Vector<f64, Static<1>>;
 type M1 = Matrix<f64, Static<1>>;
@@ -130,7 +130,7 @@ fn gradient_and_hessian_match_numerical() {
 
     #[cfg(feature = "autodiff")]
     {
-        let ad = tinyopt_rs::diff::ad_accumulation(&Sqrt2);
+        let ad = tinyopt::diff::ad_accumulation(&Sqrt2);
         assert!(check_residuals_gradient::<f64, Static<1>, _, _>(
             DenseVector::as_slice(&x),
             &res,
@@ -169,7 +169,7 @@ fn scalar_cost_gradient_matches_numerical() {
 #[test]
 fn accumulator_is_invocable_with_partial_outputs() {
     let x = [1.5];
-    let acc = tinyopt_rs::diff::ad_accumulation(&Sqrt2);
+    let acc = tinyopt::diff::ad_accumulation(&Sqrt2);
     let cost = AccumulationFn::<f64, Static<1>>::eval(&acc, &x, None, None);
     assert!(cost.is_valid());
     assert_relative_eq!(cost.cost, (1.5f64 * 1.5 - 2.0).powi(2));

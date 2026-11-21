@@ -6,11 +6,11 @@
 //! agreement with numerical differentiation.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::diff::{
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::diff::{
     DualNum, Method, ResidualsFn, calculate_jac, estimate_num_jac, eval, residuals_and_jacobian,
 };
-use tinyopt_rs::{AccumulationFn, Dynamic, Static};
+use tinyopt::{AccumulationFn, Dynamic, Static};
 
 /// r(x) = [x0*x1 - 3, x0² + x1]
 struct Mixed;
@@ -60,14 +60,14 @@ fn accumulation_static_and_dynamic_agree() {
     type Mx = Matrix<f64, Dynamic>;
 
     let x = [1.2, -0.7];
-    let acc = tinyopt_rs::diff::ad_accumulation(&Mixed);
+    let acc = tinyopt::diff::ad_accumulation(&Mixed);
 
     let mut gs = <V2 as DenseVector<f64>>::zeros(2);
-    let mut hs = <M2 as tinyopt_rs::backend::DenseMatrix<f64>>::zeros(2, 2);
+    let mut hs = <M2 as tinyopt::backend::DenseMatrix<f64>>::zeros(2, 2);
     let cs = AccumulationFn::<f64, Static<2>>::eval(&acc, &x, Some(&mut gs), Some(&mut hs));
 
     let mut gd = <Vx as DenseVector<f64>>::zeros(2);
-    let mut hd = <Mx as tinyopt_rs::backend::DenseMatrix<f64>>::zeros(2, 2);
+    let mut hd = <Mx as tinyopt::backend::DenseMatrix<f64>>::zeros(2, 2);
     let cd = AccumulationFn::<f64, Dynamic>::eval(&acc, &x, Some(&mut gd), Some(&mut hd));
 
     assert_eq!(cs.cost, cd.cost);
@@ -83,11 +83,11 @@ fn accumulation_static_and_dynamic_agree() {
 fn accumulation_builds_jtj() {
     let x = [1.2, -0.7];
     let out = residuals_and_jacobian(&Mixed, &x);
-    let acc = tinyopt_rs::diff::ad_accumulation(&Mixed);
+    let acc = tinyopt::diff::ad_accumulation(&Mixed);
     type V2 = Vector<f64, Static<2>>;
     type M2 = Matrix<f64, Static<2>>;
     let mut g = <V2 as DenseVector<f64>>::zeros(2);
-    let mut h = <M2 as tinyopt_rs::backend::DenseMatrix<f64>>::zeros(2, 2);
+    let mut h = <M2 as tinyopt::backend::DenseMatrix<f64>>::zeros(2, 2);
     let _ = AccumulationFn::<f64, Static<2>>::eval(&acc, &x, Some(&mut g), Some(&mut h));
 
     for i in 0..2 {

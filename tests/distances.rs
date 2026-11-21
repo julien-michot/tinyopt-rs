@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/distances.cpp (scalar and Vec4 parts).
 
 use approx::assert_relative_eq;
-use tinyopt_rs::diff::{Method, estimate_num_jac};
-use tinyopt_rs::distances::{
+use tinyopt::diff::{Method, estimate_num_jac};
+use tinyopt::distances::{
     cosine, cosine_with_jac, euclidean, euclidean_with_jac, l1_distance_with_jac, linf_distance,
     linf_distance_with_jac, maha_norm_cov_distance, maha_norm_cov_distance_with_jac,
     maha_norm_vars_distance, manhattan,

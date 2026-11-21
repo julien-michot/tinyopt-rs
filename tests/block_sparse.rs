@@ -6,13 +6,13 @@
 //! block_sparse_optimizer.cpp.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{
+use tinyopt::backend::{
     DenseMatrix, DenseVector, Dynamic, LinearSolverMethod, Matrix, Vector, zeros_vector,
 };
-use tinyopt_rs::block_sparse::{BlockSparseLdlt, BlockSparseMat};
-use tinyopt_rs::block_sparse_types;
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{Cost, Options, Params, Summary};
+use tinyopt::block_sparse::{BlockSparseLdlt, BlockSparseMat};
+use tinyopt::block_sparse_types;
+use tinyopt::optimizers::lm;
+use tinyopt::{Cost, Options, Params, Summary};
 
 block_sparse_types!(TwoThree, [2, 3]);
 
@@ -26,7 +26,7 @@ fn dense_solve(a: &Matrix<f64, Dynamic>, b: &[f64]) -> Vec<f64> {
     for (i, v) in b.iter().enumerate() {
         rhs.set_at(i, *v);
     }
-    let x = tinyopt_rs::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, a, &rhs)
+    let x = tinyopt::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, a, &rhs)
         .expect("dense solve");
     (0..b.len()).map(|i| x.at(i)).collect()
 }
@@ -213,7 +213,7 @@ fn block_sparse_covariance_patterns() {
     assert!(summary.succeeded());
     let cov = summary.final_cov.as_ref().expect("covariance");
     match cov {
-        tinyopt_rs::FinalCovariance::BlockSparse(m) => {
+        tinyopt::FinalCovariance::BlockSparse(m) => {
             assert_eq!(m.dims(), 5);
             assert!(m.get(0, 0) > 0.0);
         }
@@ -222,14 +222,14 @@ fn block_sparse_covariance_patterns() {
 
     let mut options = Options::default();
     options.exp.final_cov = true;
-    options.exp.cov_options.pattern = tinyopt_rs::CovariancePattern::FullDense;
+    options.exp.cov_options.pattern = tinyopt::CovariancePattern::FullDense;
     let mut x = Split([0.0; 5]);
     let mut opt = lm::Optimizer::<Split, H>::new(options);
     opt.init_with(H::with_counts(&[1, 1]));
     let summary = opt.optimize(&mut x, block_acc);
     assert!(matches!(
         summary.final_cov,
-        Some(tinyopt_rs::FinalCovariance::Dense(_))
+        Some(tinyopt::FinalCovariance::Dense(_))
     ));
 }
 
@@ -238,7 +238,7 @@ fn free_function_entry_point() {
     let mut x = Split([0.0; 5]);
     let acc = |xv: &[f64], g: Option<&mut Vx>, h: Option<&mut H>| block_acc(xv, g, h);
     let summary: Summary =
-        tinyopt_rs::optimize_block_sparse::<TwoThree, _, _>(&mut x, acc, &Options::default());
+        tinyopt::optimize_block_sparse::<TwoThree, _, _>(&mut x, acc, &Options::default());
     assert!(summary.succeeded());
-    let _ = <Matrix<f64, Dynamic> as tinyopt_rs::hessian::HessianStorage<f64>>::zeros(5);
+    let _ = <Matrix<f64, Dynamic> as tinyopt::hessian::HessianStorage<f64>>::zeros(5);
 }

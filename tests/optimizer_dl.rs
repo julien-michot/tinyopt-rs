@@ -5,8 +5,8 @@
 //! Rosenbrock convergence.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Solver, Static, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Solver, Static, optimize};
 
 type V1 = Vector<f64, Static<1>>;
 type M1 = Matrix<f64, Static<1>>;
@@ -108,7 +108,7 @@ fn dogleg_rosenbrock() {
 
 #[test]
 fn dogleg_radius_controls_via_optimizer_object() {
-    let mut opt = tinyopt_rs::optimizers::dl::Optimizer::<V1>::new(Options::new(Solver::DogLeg));
+    let mut opt = tinyopt::optimizers::dl::Optimizer::<V1>::new(Options::new(Solver::DogLeg));
     let mut x = scalar(0.0);
     let summary = opt.optimize(&mut x, shifted_quadratic());
     assert!(summary.succeeded(), "{:?}", summary.stop_reason);

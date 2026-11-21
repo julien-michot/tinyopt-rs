@@ -1,4 +1,4 @@
-# tinyopt-rs tutorial
+# tinyopt tutorial
 
 This mirrors the dense sections of the C++ tutorial (`docs/tutorials/cpp.md`).
 Every snippet below is exercised by the test suite (`tests/tutorial.rs` and the
@@ -11,8 +11,8 @@ options. The accumulation function computes the cost and, when requested, the
 gradient and Hessian:
 
 ```rust
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Static, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Static, optimize};
 
 type V1 = Vector<f64, Static<1>>;
 type M1 = Matrix<f64, Static<1>>;
@@ -41,7 +41,7 @@ evaluation-only calls pass both as `None`.
 Write the residual function once, generic over the scalar:
 
 ```rust
-use tinyopt_rs::diff::{DualNum, ResidualsFn};
+use tinyopt::diff::{DualNum, ResidualsFn};
 
 struct Circle;
 
@@ -78,8 +78,8 @@ let acc = |x: &[f64], grad: Option<&mut V1>, h: Option<&mut M1>| -> Cost {
 ## 4. Explicit optimizer and covariance
 
 ```rust
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{CovarianceOptions, Options};
+use tinyopt::optimizers::lm;
+use tinyopt::{CovarianceOptions, Options};
 
 let mut opt = lm::Optimizer::<V2>::new(Options::default());
 let summary = opt.optimize(&mut x, acc);
@@ -92,7 +92,7 @@ Set `options.exp.final_cov = true` to receive the covariance in
 ## 5. Choosing a solver
 
 ```rust
-use tinyopt_rs::{Options, Solver};
+use tinyopt::{Options, Solver};
 
 let mut options = Options::new(Solver::GaussNewton);
 let mut options = Options::new(Solver::GradientDescent); // options.gd.lr
@@ -108,7 +108,7 @@ Line searches are enabled with `options.line_search.method`:
 ## 6. Multiple parameters
 
 ```rust
-use tinyopt_rs::optimize2;
+use tinyopt::optimize2;
 
 let acc = |c: &[f64], s: &[f64], grad: Option<&mut DynGradient>,
            h: Option<&mut DynHessian>| -> Cost {
@@ -129,7 +129,7 @@ let summary = optimize2(&mut center, &mut scale, acc, &Options::default());
 Implement `Params`; the flat scalar view is required by the accumulation API:
 
 ```rust
-use tinyopt_rs::{Params, Static};
+use tinyopt::{Params, Static};
 
 struct Rectangle { size: [f64; 2] }
 
@@ -151,7 +151,7 @@ impl Params for Rectangle {
 Put the retraction in `plus_eq` and, optionally, wrap the value:
 
 ```rust
-use tinyopt_rs::ParamsWrapper;
+use tinyopt::ParamsWrapper;
 
 let mut wrapped = ParamsWrapper::new(pose);
 let summary = opt.optimize(&mut wrapped, acc);
@@ -166,7 +166,7 @@ scalar block contiguous (for `as_slice`) and apply the manifold update in
 As a scalar objective (with analytical gradient scale):
 
 ```rust
-use tinyopt_rs::losses::{huber, huber_with_scale, squared_l2};
+use tinyopt::losses::{huber, huber_with_scale, squared_l2};
 
 let n2 = squared_l2(&residual);
 let (_, scale) = huber_with_scale(n2, delta2);
@@ -176,7 +176,7 @@ let (_, scale) = huber_with_scale(n2, delta2);
 Or as robust residual blocks for the autodiff path:
 
 ```rust
-use tinyopt_rs::diff::{ResidualBlock, RobustResidualsFn};
+use tinyopt::diff::{ResidualBlock, RobustResidualsFn};
 
 impl RobustResidualsFn for Problem {
     type Scalar = f64;
@@ -213,8 +213,8 @@ Use `SparseMatrix` when the normal equations are large and sparse. Accumulate
 `Jᵀr` into the gradient and `JᵀJ` into the Hessian with triplets or `coeff_ref`:
 
 ```rust
-use tinyopt_rs::sparse::SparseMat;
-use tinyopt_rs::{Cost, Options, optimize_sparse};
+use tinyopt::sparse::SparseMat;
+use tinyopt::{Cost, Options, optimize_sparse};
 
 let acc = |x: &[f64], grad: Option<&mut DynGradient>, h: Option<&mut SparseMat>| -> Cost {
     let mut cost = 0.0;
@@ -248,23 +248,23 @@ Schur complement. Block-tridiagonal and block-sparse Hessians use their own
 algorithms:
 
 ```rust
-use tinyopt_rs::block_tridiag::BlockTridiagMat;
+use tinyopt::block_tridiag::BlockTridiagMat;
 
 let acc = |x, grad, h: Option<&mut BlockTridiagMat<6, f64>>| {
     // h.diagonal(k).add_outer_product_self(1.0, &j_row);
     // h.off_diagonal(k).add_outer_product(1.0, &j_k, &j_k1);
     // ...
 };
-let summary = tinyopt_rs::optimize_tridiag::<6, _, _>(&mut x, acc, &options);
+let summary = tinyopt::optimize_tridiag::<6, _, _>(&mut x, acc, &options);
 ```
 
 For compile-time block-sparse problems, declare the block types first:
 
 ```rust
-tinyopt_rs::block_sparse_types!(BaTypes, [6, 3]);
-let mut opt = tinyopt_rs::optimizers::lm::Optimizer::<
-    Params, tinyopt_rs::BlockSparseMat<BaTypes, f64>>::new(options);
-opt.init_with(tinyopt_rs::BlockSparseMat::with_counts(&[num_cameras, num_points]));
+tinyopt::block_sparse_types!(BaTypes, [6, 3]);
+let mut opt = tinyopt::optimizers::lm::Optimizer::<
+    Params, tinyopt::BlockSparseMat<BaTypes, f64>>::new(options);
+opt.init_with(tinyopt::BlockSparseMat::with_counts(&[num_cameras, num_points]));
 ```
 
 Covariance follows the Hessian storage: `FinalCovariance::{Dense, Sparse,

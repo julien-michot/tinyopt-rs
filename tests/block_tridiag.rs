@@ -5,13 +5,13 @@
 //! Mirrors tests/cpp/block_tridiag_ldlt.cpp and block_tridiag_optimizer.cpp.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{
+use tinyopt::backend::{
     DenseMatrix, DenseVector, Dynamic, LinearSolverMethod, Vector, zeros_vector,
 };
-use tinyopt_rs::block_tridiag::{BlockTridiagLdlt, BlockTridiagMat};
-use tinyopt_rs::hessian::HessianStorage;
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{BlockMut, Cost, CovariancePattern, Options, optimize_tridiag};
+use tinyopt::block_tridiag::{BlockTridiagLdlt, BlockTridiagMat};
+use tinyopt::hessian::HessianStorage;
+use tinyopt::optimizers::lm;
+use tinyopt::{BlockMut, Cost, CovariancePattern, Options, optimize_tridiag};
 
 type Vx = Vector<f64, Dynamic>;
 
@@ -38,7 +38,7 @@ fn dense_solve_matrix(m: &BlockTridiagMat<0, f64>, b: &[f64]) -> Vec<f64> {
     for (i, v) in b.iter().enumerate() {
         rhs.set_at(i, *v);
     }
-    let x = tinyopt_rs::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &dense, &rhs)
+    let x = tinyopt::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &dense, &rhs)
         .expect("dense solve");
     (0..b.len()).map(|i| x.at(i)).collect()
 }
@@ -52,7 +52,7 @@ fn dense_solve_fixed<const B: usize, const N: usize>(
     for (i, v) in b.iter().enumerate() {
         rhs.set_at(i, *v);
     }
-    let x = tinyopt_rs::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &dense, &rhs)
+    let x = tinyopt::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &dense, &rhs)
         .expect("dense solve");
     (0..b.len()).map(|i| x.at(i)).collect()
 }
@@ -140,7 +140,7 @@ fn tridiagonal_inverse_matches_dense_blocks() {
     let inv = ldlt.inverse_block_tridiag::<B>().expect("inverse");
 
     let dense = m.to_dense();
-    let inv_dense = tinyopt_rs::backend::inverse::<f64, Dynamic>(&dense).expect("dense inverse");
+    let inv_dense = tinyopt::backend::inverse::<f64, Dynamic>(&dense).expect("dense inverse");
     for i in 0..N {
         for r in 0..B {
             for c in 0..B {
@@ -245,7 +245,7 @@ fn optimizer_with_block_tridiagonal_hessian() {
 
     let cov = summary.final_cov.as_ref().expect("covariance");
     match cov {
-        tinyopt_rs::FinalCovariance::BlockTridiag(m) => {
+        tinyopt::FinalCovariance::BlockTridiag(m) => {
             assert_eq!(m.num_blocks(), N);
             assert!(m.get(0, 0) > 0.0);
         }
@@ -259,7 +259,7 @@ fn optimizer_with_block_tridiagonal_hessian() {
     let summary = optimize_tridiag::<2, _, _>(&mut x, acc, &options);
     assert!(matches!(
         summary.final_cov,
-        Some(tinyopt_rs::FinalCovariance::Dense(_))
+        Some(tinyopt::FinalCovariance::Dense(_))
     ));
 }
 

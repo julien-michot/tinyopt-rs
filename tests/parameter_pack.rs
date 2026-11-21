@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/parameter_pack.cpp: packed parameters.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, DynGradient, DynHessian, Options, Params, ParamsPack, Static, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, DynGradient, DynHessian, Options, Params, ParamsPack, Static, optimize};
 
 type V2 = Vector<f64, Static<2>>;
 

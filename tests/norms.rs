@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/norms.cpp: values and Jacobians of classical norms.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::diff::{Method, estimate_num_jac};
-use tinyopt_rs::losses::{
+use tinyopt::diff::{Method, estimate_num_jac};
+use tinyopt::losses::{
     l1, l1_with_jac, l2, l2_with_jac, linf, linf_with_jac, squared_l2, squared_l2_with_jac,
 };
 

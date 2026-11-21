@@ -4,11 +4,11 @@
 //! Sparse matrix and solver tests (M6a).
 
 use approx::assert_relative_eq;
-use tinyopt_rs::Options;
-use tinyopt_rs::backend::{
+use tinyopt::Options;
+use tinyopt::backend::{
     DenseMatrix, DenseVector, Dynamic, LinearSolverMethod, Matrix, Vector, zeros_vector,
 };
-use tinyopt_rs::sparse::{SimplicialLdl, SparseLinearSolvers, SparseMatrix};
+use tinyopt::sparse::{SimplicialLdl, SparseLinearSolvers, SparseMatrix};
 
 fn dense_solve(a: &SparseMatrix<f64>, b: &[f64]) -> Vec<f64> {
     let n = b.len();
@@ -17,7 +17,7 @@ fn dense_solve(a: &SparseMatrix<f64>, b: &[f64]) -> Vec<f64> {
     for (i, v) in b.iter().enumerate() {
         rhs.set_at(i, *v);
     }
-    let x = tinyopt_rs::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &m, &rhs)
+    let x = tinyopt::backend::solve::<f64, Dynamic>(LinearSolverMethod::Ldlt, &m, &rhs)
         .expect("dense solve");
     (0..n).map(|i| x.at(i)).collect()
 }

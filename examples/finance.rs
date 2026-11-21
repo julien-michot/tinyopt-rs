@@ -9,10 +9,10 @@
 
 mod common;
 
-use tinyopt_rs::backend::{DenseVector, Vector};
-use tinyopt_rs::diff::{CostFn, DualNum, cost_accumulation};
-use tinyopt_rs::optimizers::lbfgs;
-use tinyopt_rs::{Options, Static};
+use tinyopt::backend::{DenseVector, Vector};
+use tinyopt::diff::{CostFn, DualNum, cost_accumulation};
+use tinyopt::optimizers::lbfgs;
+use tinyopt::{Options, Static};
 
 type V2 = Vector<f64, Static<2>>;
 

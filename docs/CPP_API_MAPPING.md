@@ -1,4 +1,4 @@
-# C++ tinyopt → Rust tinyopt-rs API map
+# C++ tinyopt → Rust tinyopt API map
 
 This document maps the dense C++ API (tinyopt 0.8.0) to this crate. Naming keeps
 the C++ identifiers, adapted to Rust conventions (snake_case functions and
@@ -90,7 +90,7 @@ Custom parameter types must provide a flat scalar view via `Params::as_slice`
 
 | C++ | Rust |
 |---|---|
-| `diff::Jet<T, N>` | `num_dual::DualVec<T, Const<N>>` (re-exported as `tinyopt_rs::diff::DualVec`) |
+| `diff::Jet<T, N>` | `num_dual::DualVec<T, Const<N>>` (re-exported as `tinyopt::diff::DualVec`) |
 | `diff::Jet<T, Dynamic>` | `num_dual::DualVec<T, Dyn>` |
 | `jet.a`, `jet.v` | `dual.re`, `dual.eps` |
 | `[&](const auto& x)` generic lambda | `fn eval<T: DualNum<Primitive = f64>>(&self, x: &[T])` |
@@ -150,7 +150,7 @@ impl RobustResidualsFn for Problem {
 |---|---|
 | `LinearSolverMethod::LDLT` (default) | `LinearSolverMethod::Ldlt` (nalgebra `LBLT`, faer `Ldlt`) |
 | `LLT`, `LU`, `QR`, `SVD` | `Llt`, `Lu`, `Qr`, `Svd` |
-| `tinyopt::Inverse(m)` | `tinyopt_rs::inverse(&m)` |
+| `tinyopt::Inverse(m)` | `tinyopt::inverse(&m)` |
 | `TINYOPT_ENABLE_LINEAR_SOLVER_*` | cargo features `solver-ldlt/llt/lu/qr/svd` |
 
 ## Not ported (dense scope)

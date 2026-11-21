@@ -9,14 +9,14 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use tinyopt_rs::Real;
+use tinyopt::Real;
 #[cfg(feature = "nalgebra")]
-use tinyopt_rs::Static;
-use tinyopt_rs::backend::{
+use tinyopt::Static;
+use tinyopt::backend::{
     DenseMatrix, DenseVector, Dim, Dynamic, Matrix, Vector, zeros_matrix, zeros_vector,
 };
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{Cost, Options};
+use tinyopt::optimizers::lm;
+use tinyopt::{Cost, Options};
 
 /// Benchmark options mirroring `benchmarks/common/options.h`.
 fn options() -> Options {
@@ -188,8 +188,8 @@ fn run_benchmark<S, D, F>(c: &mut Criterion, label: &str, n: usize, acc: F)
 where
     S: Real + 'static,
     D: Dim,
-    Vector<S, D>: tinyopt_rs::Params<Scalar = S, Dim = D>,
-    Matrix<S, D>: tinyopt_rs::hessian::HessianStorage<S>,
+    Vector<S, D>: tinyopt::Params<Scalar = S, Dim = D>,
+    Matrix<S, D>: tinyopt::hessian::HessianStorage<S>,
     F: Fn(&[S], Option<&mut Vector<S, D>>, Option<&mut Matrix<S, D>>) -> Cost + Copy,
 {
     let mut optimizer = lm::Optimizer::<Vector<S, D>>::new(options());

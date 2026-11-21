@@ -4,9 +4,9 @@
 //! Mirrors tests/cpp/fixed.cpp (dense parts): fixed parameter dimensions.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{Cost, Options, Params, Static, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::optimizers::lm;
+use tinyopt::{Cost, Options, Params, Static, optimize};
 
 type V3 = Vector<f64, Static<3>>;
 type M3 = Matrix<f64, Static<3>>;

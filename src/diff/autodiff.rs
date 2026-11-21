@@ -8,7 +8,7 @@
 //! and derivatives in a single pass):
 //!
 //! ```
-//! use tinyopt_rs::diff::{DualNum, ResidualsFn, residuals_and_jacobian};
+//! use tinyopt::diff::{DualNum, ResidualsFn, residuals_and_jacobian};
 //!
 //! struct Sqrt2;
 //!

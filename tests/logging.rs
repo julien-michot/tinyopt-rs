@@ -6,8 +6,8 @@
 use std::sync::{Mutex, Once};
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Static, optimize};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Static, optimize};
 
 static LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static INIT: Once = Once::new();

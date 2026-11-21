@@ -5,11 +5,11 @@
 //! Mirrors the dense sections of docs/tutorials/cpp.md.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-use tinyopt_rs::diff::{DualNum, ResidualsFn};
-use tinyopt_rs::losses::{huber, huber_with_scale, squared_l2};
-use tinyopt_rs::optimizers::lm;
-use tinyopt_rs::{Cost, Dynamic, Options, Solver, Static, optimize, optimize_residuals};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::diff::{DualNum, ResidualsFn};
+use tinyopt::losses::{huber, huber_with_scale, squared_l2};
+use tinyopt::optimizers::lm;
+use tinyopt::{Cost, Dynamic, Options, Solver, Static, optimize, optimize_residuals};
 
 type V2 = Vector<f64, Static<2>>;
 type M2 = Matrix<f64, Static<2>>;

@@ -6,9 +6,9 @@
 //! vectors, scalar residuals, and dynamic sizes.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseVector, Vector};
-use tinyopt_rs::diff::{DualNum, ResidualsFn};
-use tinyopt_rs::{Dynamic, Options, Params, Static, optimize_residuals};
+use tinyopt::backend::{DenseVector, Vector};
+use tinyopt::diff::{DualNum, ResidualsFn};
+use tinyopt::{Dynamic, Options, Params, Static, optimize_residuals};
 
 type V2 = Vector<f64, Static<2>>;
 

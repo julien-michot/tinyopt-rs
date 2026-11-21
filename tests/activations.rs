@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/activations.cpp.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::diff::{Method, estimate_num_jac};
-use tinyopt_rs::losses::{
+use tinyopt::diff::{Method, estimate_num_jac};
+use tinyopt::losses::{
     leaky_relu, leaky_relu_vec, leaky_relu_vec_with_jac, leaky_relu_with_jac, relu, relu_vec,
     relu_vec_with_jac, relu_with_jac, sigmoid, sigmoid_vec_with_jac, sigmoid_with_jac, tanh,
     tanh_vec_with_jac, tanh_with_jac,

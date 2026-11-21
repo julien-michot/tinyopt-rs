@@ -5,8 +5,8 @@
 //! of every M-estimator, verified against numerical differentiation.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::diff::{Method, estimate_num_jac};
-use tinyopt_rs::losses::{
+use tinyopt::diff::{Method, estimate_num_jac};
+use tinyopt::losses::{
     arctan, arctan_with_scale, blake_zisserman, blake_zisserman_with_scale, cauchy,
     cauchy_with_scale, geman_mcclure, geman_mcclure_with_scale, huber, huber_with_scale,
     squared_l2, truncated, truncated_with_scale, tukey, tukey_with_scale,

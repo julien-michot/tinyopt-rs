@@ -5,8 +5,8 @@
 //! gradient-only accumulation, first step, and convergence.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseVector, Matrix, Vector};
-use tinyopt_rs::{Cost, Options, Solver, Static, optimize};
+use tinyopt::backend::{DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Solver, Static, optimize};
 
 type V1 = Vector<f64, Static<1>>;
 
@@ -66,7 +66,7 @@ fn gradient_descent_converges() {
 #[test]
 fn gradient_descent_dynamic_problem() {
     // 2D quadratic with dynamic-size parameters.
-    use tinyopt_rs::Dynamic;
+    use tinyopt::Dynamic;
     type Vx = Vector<f64, Dynamic>;
     type Mx = Matrix<f64, Dynamic>;
     let acc = |x: &[f64], grad: Option<&mut Vx>, _h: Option<&mut Mx>| -> Cost {

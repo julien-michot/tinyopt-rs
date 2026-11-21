@@ -3,7 +3,7 @@
 
 //! Shared helpers for the examples.
 
-use tinyopt_rs::Real;
+use tinyopt::Real;
 
 /// Format a scalar slice as comma-separated values.
 pub fn fmt_slice<S: Real>(v: &[S]) -> String {

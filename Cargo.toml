@@ -1,9 +1,9 @@
 [package]
-name = "tinyopt-rs"
+name = "tinyopt"
 version = "0.8.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A lightweight, Rust native optimization library (dense systems)"
+description = "A lightweight, Rust native optimization library (dense, sparse and block-structured systems)"
 authors = ["Julien Michot"]
 license = "Apache-2.0"
 repository = "https://github.com/julienmichot/tinyopt-rs"
@@ -12,7 +12,7 @@ keywords = ["optimization", "least-squares", "autodiff", "nonlinear"]
 categories = ["science", "mathematics"]
 
 [lib]
-name = "tinyopt_rs"
+name = "tinyopt"
 path = "src/lib.rs"
 
 [features]

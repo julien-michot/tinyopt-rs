@@ -4,8 +4,8 @@
 //! Mirrors tests/cpp/variadic.cpp: multi-parameter optimization.
 
 use approx::assert_relative_eq;
-use tinyopt_rs::backend::{DenseMatrix, DenseVector};
-use tinyopt_rs::{Cost, DynGradient, DynHessian, Options, Params, optimize2, optimize3};
+use tinyopt::backend::{DenseMatrix, DenseVector};
+use tinyopt::{Cost, DynGradient, DynHessian, Options, Params, optimize2, optimize3};
 
 #[test]
 fn two_scalar_parameters() {
@@ -71,8 +71,8 @@ fn three_scalar_parameters() {
 
 #[test]
 fn vector_and_scalar_parameters() {
-    use tinyopt_rs::Static;
-    use tinyopt_rs::backend::{DenseVector, Vector};
+    use tinyopt::Static;
+    use tinyopt::backend::{DenseVector, Vector};
     type V2 = Vector<f64, Static<2>>;
     let mut center = <V2 as DenseVector<f64>>::zeros(2);
     let mut scale = 0.0_f64;
