@@ -45,6 +45,67 @@ pub trait Params {
     }
 }
 
+/// Thin by-reference adapter around a parameter type, mirroring C++
+/// `ParamsWrapper`.
+///
+/// Useful to keep external storage (for instance a manifold element) at the
+/// call site while exposing the `Params` contract to the optimizer.
+#[derive(Clone, Debug, Default)]
+pub struct ParamsWrapper<T> {
+    /// Wrapped parameter value.
+    pub value: T,
+}
+
+impl<T> ParamsWrapper<T> {
+    /// Wrap a value.
+    pub fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T> core::ops::Deref for ParamsWrapper<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T> core::ops::DerefMut for ParamsWrapper<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+}
+
+impl<T> Params for ParamsWrapper<T>
+where
+    T: Params,
+    T::Scalar: Real,
+{
+    type Scalar = T::Scalar;
+    type Dim = T::Dim;
+
+    fn dims(&self) -> usize {
+        self.value.dims()
+    }
+
+    fn as_slice(&self) -> &[T::Scalar] {
+        self.value.as_slice()
+    }
+
+    fn plus_eq(&mut self, delta: &[T::Scalar]) {
+        self.value.plus_eq(delta);
+    }
+
+    fn norm2(&self) -> T::Scalar {
+        self.value.norm2()
+    }
+
+    fn fixed(&self) -> Option<Vec<usize>> {
+        self.value.fixed()
+    }
+}
+
 #[cfg(feature = "nalgebra")]
 mod nalgebra_params {
     use super::*;

@@ -4,6 +4,10 @@
 //! Levenberg-Marquardt optimizer.
 
 use crate::backend::{DenseMatrix, DenseVector, Matrix, Vector, zeros_vector};
+use crate::cost::Cost;
+use crate::covariance::{CovarianceOptions, compute_covariance};
+use crate::optimizers::fixed::FixedSet;
+use crate::optimizers::impl_fixed_api;
 use crate::optimizers::optimizer::{AccumulationFn, Algorithm, Step, neg_solve, run};
 use crate::options::Options;
 use crate::params::Params;
@@ -18,6 +22,9 @@ use num_traits::{FromPrimitive, One, ToPrimitive};
 pub struct Optimizer<P: Params> {
     options: Options,
     state: Option<State<P>>,
+    final_h: Option<Matrix<P::Scalar, P::Dim>>,
+    final_cost: Cost,
+    fixed: FixedSet,
 }
 
 #[derive(Clone, Debug)]
@@ -28,11 +35,29 @@ struct State<P: Params> {
 }
 
 impl<P: Params> Optimizer<P> {
+    impl_fixed_api!();
+
+    /// Posterior covariance estimate (with default options).
+    pub fn covariance(&self) -> Option<Matrix<P::Scalar, P::Dim>> {
+        <Self as Algorithm<P>>::covariance(self, &CovarianceOptions::default())
+    }
+
+    /// Posterior covariance estimate with explicit options.
+    pub fn covariance_with(
+        &self,
+        options: &CovarianceOptions,
+    ) -> Option<Matrix<P::Scalar, P::Dim>> {
+        <Self as Algorithm<P>>::covariance(self, options)
+    }
+
     /// Create an optimizer with the given options.
     pub fn new(options: Options) -> Self {
         Self {
             options,
             state: None,
+            final_h: None,
+            final_cost: Cost::default(),
+            fixed: FixedSet::default(),
         }
     }
 
@@ -57,6 +82,25 @@ impl<P: Params> Optimizer<P> {
 }
 
 impl<P: Params> Algorithm<P> for Optimizer<P> {
+    fn fixed(&self) -> &FixedSet {
+        &self.fixed
+    }
+
+    fn save_final_system(&mut self, h: &Matrix<P::Scalar, P::Dim>, cost: Cost) {
+        self.final_h = Some(h.clone());
+        self.final_cost = cost;
+    }
+
+    fn covariance(&self, options: &CovarianceOptions) -> Option<Matrix<P::Scalar, P::Dim>> {
+        let h = self.final_h.as_ref()?;
+        compute_covariance::<P::Scalar, P::Dim>(
+            h,
+            options,
+            self.final_cost,
+            self.fixed.indices(),
+            h.nrows(),
+        )
+    }
     fn reset(&mut self, dims: usize) {
         let lambda = self.options.lm.damping_init as f64;
         self.state = Some(State {

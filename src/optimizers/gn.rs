@@ -3,7 +3,11 @@
 
 //! Gauss-Newton optimizer.
 
-use crate::backend::{Matrix, Vector};
+use crate::backend::{DenseMatrix, Matrix, Vector};
+use crate::cost::Cost;
+use crate::covariance::{CovarianceOptions, compute_covariance};
+use crate::optimizers::fixed::FixedSet;
+use crate::optimizers::impl_fixed_api;
 use crate::optimizers::optimizer::{AccumulationFn, Algorithm, Step, neg_solve, run};
 use crate::options::Options;
 use crate::params::Params;
@@ -16,14 +20,35 @@ use crate::summary::Summary;
 pub struct Optimizer<P: Params> {
     options: Options,
     _marker: core::marker::PhantomData<P>,
+    final_h: Option<Matrix<P::Scalar, P::Dim>>,
+    final_cost: Cost,
+    fixed: FixedSet,
 }
 
 impl<P: Params> Optimizer<P> {
+    impl_fixed_api!();
+
+    /// Posterior covariance estimate (with default options).
+    pub fn covariance(&self) -> Option<Matrix<P::Scalar, P::Dim>> {
+        <Self as Algorithm<P>>::covariance(self, &CovarianceOptions::default())
+    }
+
+    /// Posterior covariance estimate with explicit options.
+    pub fn covariance_with(
+        &self,
+        options: &CovarianceOptions,
+    ) -> Option<Matrix<P::Scalar, P::Dim>> {
+        <Self as Algorithm<P>>::covariance(self, options)
+    }
+
     /// Create an optimizer with the given options.
     pub fn new(options: Options) -> Self {
         Self {
             options,
             _marker: core::marker::PhantomData,
+            final_h: None,
+            final_cost: Cost::default(),
+            fixed: FixedSet::default(),
         }
     }
 
@@ -43,6 +68,25 @@ impl<P: Params> Optimizer<P> {
 }
 
 impl<P: Params> Algorithm<P> for Optimizer<P> {
+    fn fixed(&self) -> &FixedSet {
+        &self.fixed
+    }
+
+    fn save_final_system(&mut self, h: &Matrix<P::Scalar, P::Dim>, cost: Cost) {
+        self.final_h = Some(h.clone());
+        self.final_cost = cost;
+    }
+
+    fn covariance(&self, options: &CovarianceOptions) -> Option<Matrix<P::Scalar, P::Dim>> {
+        let h = self.final_h.as_ref()?;
+        compute_covariance::<P::Scalar, P::Dim>(
+            h,
+            options,
+            self.final_cost,
+            self.fixed.indices(),
+            h.nrows(),
+        )
+    }
     fn reset(&mut self, _dims: usize) {}
 
     fn precondition(

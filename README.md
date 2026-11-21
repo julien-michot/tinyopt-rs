@@ -80,7 +80,7 @@ assert!(summary.converged());
 | M1 | Cost/Summary/Options, LM/GN, numdiff, gradient checks | ✅ |
 | M2 | GD/CG/BFGS/L-BFGS/DogLeg, line search, losses, distances | ✅ |
 | M3 | direct autodiff accumulation, robust blocks, AD type coverage | ✅ |
-| M4 | fixed params, covariance, multi-params, manifolds | ⏳ |
+| M4 | fixed params, covariance, multi-params, manifolds | ✅ |
 | M5 | examples, benchmarks, docs parity | ⏳ |
 
 ## Losses and distances
@@ -94,6 +94,21 @@ Classical norms (`squared_l2`, `l2`, `l1`, `linf`), robust M-estimators
 (`huber`, `tukey`, `arctan`, `cauchy`, `geman_mcclure`, `blake_zisserman`,
 `truncated`) with optional Jacobian scales, Mahalanobis norms/whitening,
 activations, softmax and vector distances are all available.
+
+## Fixed parameters, covariance and multiple parameters
+
+```rust
+use tinyopt_rs::optimizers::lm;
+use tinyopt_rs::{CovarianceOptions, Options};
+
+let mut opt = lm::Optimizer::<Vec2>::new(Options::default());
+opt.fix(&[1]);                       // hold parameter 1 fixed
+let summary = opt.optimize(&mut x, acc);
+let cov = opt.covariance_with(&CovarianceOptions::default());
+```
+
+`optimize2` / `optimize3` run several parameters together (packed internally and
+written back once), and `ParamsWrapper` adapts manifold-style parameter types.
 
 ## Development
 

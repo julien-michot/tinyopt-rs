@@ -96,6 +96,8 @@ impl Default for LineSearchOptions {
 pub struct Export {
     /// Save the final covariance matrix in the summary.
     pub final_cov: bool,
+    /// Options used to compute the exported covariance.
+    pub cov_options: crate::covariance::CovarianceOptions,
     /// Save per-iteration errors, step norms, and success flags.
     pub save_history: bool,
     /// Measure the optimization duration.
@@ -106,6 +108,7 @@ impl Default for Export {
     fn default() -> Self {
         Self {
             final_cov: false,
+            cov_options: crate::covariance::CovarianceOptions::default(),
             save_history: true,
             measure_time: true,
         }

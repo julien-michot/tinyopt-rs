@@ -72,6 +72,7 @@ compile_error!("enable a backend: `nalgebra` (default) or `faer`");
 
 pub mod backend;
 pub mod cost;
+pub mod covariance;
 pub mod diff;
 pub mod distances;
 pub mod losses;
@@ -79,6 +80,7 @@ pub mod math;
 pub mod optimizers;
 pub mod options;
 pub mod params;
+pub mod params_pack;
 pub mod real;
 pub mod stop_reasons;
 pub mod summary;
@@ -87,15 +89,20 @@ mod optimize;
 
 pub use backend::{Dim, Dynamic, Static};
 pub use cost::Cost;
+pub use covariance::CovarianceOptions;
 pub use math::inverse;
 #[cfg(feature = "autodiff")]
 pub use optimize::optimize_robust_residuals;
-pub use optimize::{optimize, optimize_default};
+pub use optimize::{
+    DynGradient, DynHessian, optimize, optimize_default, optimize2, optimize2_default, optimize3,
+    optimize3_default,
+};
 #[cfg(feature = "autodiff")]
 pub use optimize::{optimize_residuals, optimize_residuals_default};
 pub use optimizers::AccumulationFn;
 pub use options::{LineSearchMethod, Options, Solver};
-pub use params::Params;
+pub use params::{Params, ParamsWrapper};
+pub use params_pack::{PackValues, ParamsPack};
 pub use real::Real;
 pub use stop_reasons::StopReason;
 pub use summary::{History, Summary};

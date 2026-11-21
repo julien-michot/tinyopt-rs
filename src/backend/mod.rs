@@ -181,6 +181,15 @@ pub trait DenseMatrix<S: Real>: Clone + core::fmt::Debug + Send + Sync {
     fn add_outer_product_self(&mut self, a: S, x: &[S]) {
         self.add_outer_product(a, x, x);
     }
+
+    /// Zero the given row and column (used to mask fixed parameters).
+    fn zero_row_col(&mut self, index: usize) {
+        let n = self.nrows().min(self.ncols());
+        for k in 0..n {
+            self.set_elem(index, k, S::zero());
+            self.set_elem(k, index, S::zero());
+        }
+    }
 }
 
 /// Dense linear solver method (dense subset of tinyopt's `LinearSolverMethod`).

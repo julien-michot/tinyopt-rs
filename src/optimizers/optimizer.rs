@@ -5,7 +5,7 @@
 //! common trust-region / line-search loop, mirroring tinyopt's
 //! `OptimizerCore::OptimizeAcc`.
 
-use num_traits::{One, ToPrimitive};
+use num_traits::{One, ToPrimitive, Zero};
 use std::time::Instant;
 
 use crate::backend::{
@@ -13,7 +13,9 @@ use crate::backend::{
     zeros_vector,
 };
 use crate::cost::Cost;
+use crate::covariance::CovarianceOptions;
 use crate::math::{all_finite, max_abs};
+use crate::optimizers::fixed::FixedSet;
 use crate::options::{LineSearchMethod, Options};
 use crate::params::Params;
 use crate::real::Real;
@@ -114,6 +116,17 @@ pub(crate) trait Algorithm<P: Params> {
 
     /// Called after a rejected step.
     fn on_bad_step(&mut self);
+
+    /// Fixed-parameter set.
+    fn fixed(&self) -> &FixedSet;
+
+    /// Store the final (un-damped) system for covariance export.
+    fn save_final_system(&mut self, _h: &Matrix<P::Scalar, P::Dim>, _cost: Cost) {}
+
+    /// Covariance approximation from the final system, if available.
+    fn covariance(&self, _options: &CovarianceOptions) -> Option<Matrix<P::Scalar, P::Dim>> {
+        None
+    }
 }
 
 fn to_f64<S: Real>(v: S) -> f64 {
@@ -146,6 +159,19 @@ where
     let mut grad = zeros_vector::<P::Scalar, P::Dim>(dims);
     let mut h = zeros_matrix::<P::Scalar, P::Dim>(dims, dims);
     algo.reset(dims);
+
+    // Fixed parameters: explicit `fix()` indices take precedence over the
+    // `Params::fixed()` trait method, matching the C++ API (with a warning).
+    let explicit_fixed = algo.fixed().indices().to_vec();
+    let trait_fixed = x.fixed().unwrap_or_default();
+    if !explicit_fixed.is_empty() && !trait_fixed.is_empty() {
+        log::warn!("both fix() and Params::fixed() are set; using the explicit indices");
+    }
+    let fixed = if !explicit_fixed.is_empty() {
+        explicit_fixed
+    } else {
+        trait_fixed
+    };
 
     let mut cost = f.eval(P::as_slice(x), None, None);
     if cost.num_residuals == 0 {
@@ -188,6 +214,19 @@ where
         sum.final_cost = build;
         cost = build;
         algo.on_build(&grad);
+
+        // Mask fixed parameters: zero gradient, zero row/column, unit diagonal.
+        for &idx in &fixed {
+            if idx < dims {
+                grad.set_at(idx, P::Scalar::zero());
+                h.zero_row_col(idx);
+                h.set_elem(idx, idx, P::Scalar::one());
+            }
+        }
+
+        if options.log.enable {
+            log::trace!("#{}: cost = {:.6e}", sum.num_iters, build.cost);
+        }
 
         // --- First-order stopping criteria ----------------------------------
         let grad_norm2 = to_f64(DenseVector::norm2(&grad));
@@ -238,10 +277,16 @@ where
         }
 
         // --- Trial step and acceptance --------------------------------------
-        let dx_f32: Vec<f32> = DenseVector::as_slice(&dx)
-            .iter()
-            .map(|v| v.to_f32().expect("scalar fits in f32"))
-            .collect();
+        let needs_f32 =
+            options.stop.step_callback.is_some() || options.stop.stop_callback2.is_some();
+        let dx_f32: Vec<f32> = if needs_f32 {
+            DenseVector::as_slice(&dx)
+                .iter()
+                .map(|v| v.to_f32().expect("scalar fits in f32"))
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         P::plus_eq(x, DenseVector::as_slice(&dx));
         if notify_step(options, &dx_f32, false) {
@@ -283,7 +328,11 @@ where
             // Roll back to the previous parameters.
             let mut neg_dx = dx.clone();
             DenseVector::scale(&mut neg_dx, -P::Scalar::one());
-            let neg_f32: Vec<f32> = dx_f32.iter().map(|v| -v).collect();
+            let neg_f32: Vec<f32> = if needs_f32 {
+                dx_f32.iter().map(|v| -v).collect()
+            } else {
+                Vec::new()
+            };
             P::plus_eq(x, DenseVector::as_slice(&neg_dx));
             if notify_step(options, &neg_f32, true) {
                 reason = StopReason::UserStopped;
@@ -315,12 +364,14 @@ where
             }
             if reason == StopReason::None {
                 if let Some(cb) = &options.stop.stop_callback2 {
-                    let grad_f32: Vec<f32> = DenseVector::as_slice(&grad)
-                        .iter()
-                        .map(|v| v.to_f32().expect("scalar fits in f32"))
-                        .collect();
-                    if cb(cost.cost, &dx_f32, &grad_f32) {
-                        reason = StopReason::UserStopped;
+                    if needs_f32 {
+                        let grad_f32: Vec<f32> = DenseVector::as_slice(&grad)
+                            .iter()
+                            .map(|v| v.to_f32().expect("scalar fits in f32"))
+                            .collect();
+                        if cb(cost.cost, &dx_f32, &grad_f32) {
+                            reason = StopReason::UserStopped;
+                        }
                     }
                 }
             }
@@ -344,6 +395,34 @@ where
     } else {
         reason
     };
+
+    // Store the final system so that covariance is available to optimizer
+    // objects even when no export was requested.
+    if algo.needs_hessian() {
+        let mut final_h = zeros_matrix::<P::Scalar, P::Dim>(dims, dims);
+        let _ = f.eval(P::as_slice(x), None, Some(&mut final_h));
+        for &idx in &fixed {
+            if idx < dims {
+                final_h.zero_row_col(idx);
+                final_h.set_elem(idx, idx, P::Scalar::one());
+            }
+        }
+        algo.save_final_system(&final_h, sum.final_cost);
+    } else {
+        algo.save_final_system(&h, sum.final_cost);
+    }
+
+    if options.exp.final_cov {
+        if let Some(cov) = algo.covariance(&options.exp.cov_options) {
+            let mut out = zeros_matrix::<f32, crate::backend::Dynamic>(dims, dims);
+            for i in 0..dims {
+                for j in 0..dims {
+                    out.set_elem(i, j, cov.elem(i, j).to_f32().expect("fits in f32"));
+                }
+            }
+            sum.final_cov = Some(out);
+        }
+    }
 
     if options.log.enable && sum.stop_reason != StopReason::None {
         log::debug!(

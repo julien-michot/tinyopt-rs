@@ -3,11 +3,19 @@
 
 //! High-level optimization entry points, mirroring `tinyopt::Optimize`.
 
+use crate::backend::{Dynamic, Matrix, Vector};
+use crate::cost::Cost;
 use crate::optimizers::AccumulationFn;
 use crate::optimizers::{bfgs, cg, dl, gd, gn, lbfgs, lm};
 use crate::options::{Options, Solver};
 use crate::params::Params;
+use crate::params_pack::ParamsPack;
 use crate::summary::Summary;
+
+/// Dynamic gradient type used by multi-parameter optimization.
+pub type DynGradient = Vector<f64, Dynamic>;
+/// Dynamic Hessian type used by multi-parameter optimization.
+pub type DynHessian = Matrix<f64, Dynamic>;
 
 /// Optimize `x` in place with the solver selected by `options`.
 ///
@@ -71,4 +79,67 @@ where
     F: crate::diff::RobustResidualsFn<Scalar = f64> + ?Sized,
 {
     optimize(x, crate::diff::robust_accumulation(f), options)
+}
+
+/// Optimize two parameters together.
+pub fn optimize2<A, B, F>(a: &mut A, b: &mut B, f: F, options: &Options) -> Summary
+where
+    A: Params<Scalar = f64> + Clone,
+    B: Params<Scalar = f64> + Clone,
+    F: Fn(&[f64], &[f64], Option<&mut DynGradient>, Option<&mut DynHessian>) -> Cost,
+{
+    let da = a.dims();
+    let mut pack = ParamsPack::new((a.clone(), b.clone()));
+    let summary = {
+        let acc = |flat: &[f64], grad: Option<&mut DynGradient>, h: Option<&mut DynHessian>| {
+            f(&flat[..da], &flat[da..], grad, h)
+        };
+        optimize(&mut pack, acc, options)
+    };
+    *a = pack.values.0.clone();
+    *b = pack.values.1.clone();
+    summary
+}
+
+/// Optimize two parameters with default options.
+pub fn optimize2_default<A, B, F>(a: &mut A, b: &mut B, f: F) -> Summary
+where
+    A: Params<Scalar = f64> + Clone,
+    B: Params<Scalar = f64> + Clone,
+    F: Fn(&[f64], &[f64], Option<&mut DynGradient>, Option<&mut DynHessian>) -> Cost,
+{
+    optimize2(a, b, f, &Options::default())
+}
+
+/// Optimize three parameters together.
+pub fn optimize3<A, B, C, F>(a: &mut A, b: &mut B, c: &mut C, f: F, options: &Options) -> Summary
+where
+    A: Params<Scalar = f64> + Clone,
+    B: Params<Scalar = f64> + Clone,
+    C: Params<Scalar = f64> + Clone,
+    F: Fn(&[f64], &[f64], &[f64], Option<&mut DynGradient>, Option<&mut DynHessian>) -> Cost,
+{
+    let (da, db) = (a.dims(), b.dims());
+    let mut pack = ParamsPack::new((a.clone(), b.clone(), c.clone()));
+    let summary = {
+        let acc = |flat: &[f64], grad: Option<&mut DynGradient>, h: Option<&mut DynHessian>| {
+            f(&flat[..da], &flat[da..da + db], &flat[da + db..], grad, h)
+        };
+        optimize(&mut pack, acc, options)
+    };
+    *a = pack.values.0.clone();
+    *b = pack.values.1.clone();
+    *c = pack.values.2.clone();
+    summary
+}
+
+/// Optimize three parameters with default options.
+pub fn optimize3_default<A, B, C, F>(a: &mut A, b: &mut B, c: &mut C, f: F) -> Summary
+where
+    A: Params<Scalar = f64> + Clone,
+    B: Params<Scalar = f64> + Clone,
+    C: Params<Scalar = f64> + Clone,
+    F: Fn(&[f64], &[f64], &[f64], Option<&mut DynGradient>, Option<&mut DynHessian>) -> Cost,
+{
+    optimize3(a, b, c, f, &Options::default())
 }

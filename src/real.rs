@@ -27,7 +27,7 @@ pub trait Real:
     + Send
     + Sync
     + 'static
-    + faer::traits::ComplexField
+    + faer::traits::ComplexField<Real = Self>
 {
 }
 

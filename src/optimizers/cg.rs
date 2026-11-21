@@ -6,6 +6,8 @@
 use num_traits::{FromPrimitive, ToPrimitive, Zero};
 
 use crate::backend::{DenseVector, Matrix, Vector, zeros_vector};
+use crate::optimizers::fixed::FixedSet;
+use crate::optimizers::impl_fixed_api;
 use crate::optimizers::optimizer::{AccumulationFn, Algorithm, Step, run};
 use crate::options::Options;
 use crate::params::Params;
@@ -16,6 +18,7 @@ use crate::summary::Summary;
 pub struct Optimizer<P: Params> {
     options: Options,
     state: Option<State<P>>,
+    fixed: FixedSet,
 }
 
 #[derive(Clone, Debug)]
@@ -28,11 +31,14 @@ struct State<P: Params> {
 }
 
 impl<P: Params> Optimizer<P> {
+    impl_fixed_api!();
+
     /// Create an optimizer with the given options.
     pub fn new(options: Options) -> Self {
         Self {
             options,
             state: None,
+            fixed: FixedSet::default(),
         }
     }
 
@@ -57,6 +63,9 @@ impl<P: Params> Optimizer<P> {
 }
 
 impl<P: Params> Algorithm<P> for Optimizer<P> {
+    fn fixed(&self) -> &FixedSet {
+        &self.fixed
+    }
     fn needs_hessian(&self) -> bool {
         false
     }
