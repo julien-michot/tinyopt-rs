@@ -4,10 +4,9 @@
 //! High-level optimization entry points, mirroring `tinyopt::Optimize`.
 
 use crate::optimizers::AccumulationFn;
-use crate::optimizers::{gn, lm};
+use crate::optimizers::{bfgs, cg, dl, gd, gn, lbfgs, lm};
 use crate::options::{Options, Solver};
 use crate::params::Params;
-use crate::stop_reasons::StopReason;
 use crate::summary::Summary;
 
 /// Optimize `x` in place with the solver selected by `options`.
@@ -22,13 +21,11 @@ where
     match options.solver_type {
         Solver::LevenbergMarquardt => lm::Optimizer::<P>::new(options.clone()).optimize(x, f),
         Solver::GaussNewton => gn::Optimizer::<P>::new(options.clone()).optimize(x, f),
-        other => {
-            log::warn!("solver {other:?} is not implemented yet in tinyopt-rs");
-            Summary {
-                stop_reason: StopReason::Skipped,
-                ..Default::default()
-            }
-        }
+        Solver::GradientDescent => gd::Optimizer::<P>::new(options.clone()).optimize(x, f),
+        Solver::ConjugateGradient => cg::Optimizer::<P>::new(options.clone()).optimize(x, f),
+        Solver::DogLeg => dl::Optimizer::<P>::new(options.clone()).optimize(x, f),
+        Solver::Bfgs => bfgs::Optimizer::<P>::new(options.clone()).optimize(x, f),
+        Solver::Lbfgs => lbfgs::Optimizer::<P>::new(options.clone()).optimize(x, f),
     }
 }
 

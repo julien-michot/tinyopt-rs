@@ -44,6 +44,8 @@ pub trait Dim: 'static + Copy + Default + core::fmt::Debug {
     fn solve_svd<S: Real>(a: &Self::Mat<S>, b: &Self::Vec<S>) -> Option<Self::Vec<S>>;
     /// Dense matrix inverse.
     fn inverse<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>>;
+    /// Lower Cholesky factor `L` such that `A = L Lᵀ`.
+    fn cholesky_lower<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>>;
 }
 
 /// Runtime-known dimension (C++ `Eigen::Dynamic`).

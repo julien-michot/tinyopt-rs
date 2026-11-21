@@ -77,10 +77,22 @@ assert!(summary.converged());
 |---|---|---|
 | M0 | scaffold, backend abstraction, params, num-dual autodiff | ✅ |
 | M1 | Cost/Summary/Options, LM/GN, numdiff, gradient checks | ✅ |
-| M2 | GD/CG/BFGS/L-BFGS/DogLeg, line search, losses, distances | ⏳ |
+| M2 | GD/CG/BFGS/L-BFGS/DogLeg, line search, losses, distances | ✅ |
 | M3 | autodiff optimizer adapter, diffusion tests | ⏳ |
 | M4 | fixed params, covariance, multi-params, manifolds | ⏳ |
 | M5 | examples, benchmarks, docs parity | ⏳ |
+
+## Losses and distances
+
+```rust
+use tinyopt_rs::losses::{huber, huber_loss, cauchy_loss, maha_whitened_cov};
+use tinyopt_rs::distances::{euclidean, euclidean_with_jac};
+```
+
+Classical norms (`squared_l2`, `l2`, `l1`, `linf`), robust M-estimators
+(`huber`, `tukey`, `arctan`, `cauchy`, `geman_mcclure`, `blake_zisserman`,
+`truncated`) with optional Jacobian scales, Mahalanobis norms/whitening,
+activations, softmax and vector distances are all available.
 
 ## Development
 

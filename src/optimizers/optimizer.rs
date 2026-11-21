@@ -14,7 +14,7 @@ use crate::backend::{
 };
 use crate::cost::Cost;
 use crate::math::{all_finite, max_abs};
-use crate::options::Options;
+use crate::options::{LineSearchMethod, Options};
 use crate::params::Params;
 use crate::real::Real;
 use crate::stop_reasons::StopReason;
@@ -78,6 +78,17 @@ pub(crate) trait Algorithm<P: Params> {
     /// Initialize per-problem state.
     fn reset(&mut self, dims: usize);
 
+    /// Whether the optimizer needs the Hessian approximation.
+    ///
+    /// First-order methods return `false`, so accumulators are called with
+    /// `h == None` and users do not have to compute `JᵀJ`.
+    fn needs_hessian(&self) -> bool {
+        true
+    }
+
+    /// Called after each accumulation, with the newly built gradient.
+    fn on_build(&mut self, _grad: &Vector<P::Scalar, P::Dim>) {}
+
     /// Precondition the normal equations before solving (Jacobi scaling, damping).
     fn precondition(
         &mut self,
@@ -94,6 +105,9 @@ pub(crate) trait Algorithm<P: Params> {
         grad: &Vector<P::Scalar, P::Dim>,
         h: &Matrix<P::Scalar, P::Dim>,
     ) -> Option<Step<P::Scalar, P::Dim>>;
+
+    /// Called with the final step (after an optional line search).
+    fn update_step(&mut self, _step: &Vector<P::Scalar, P::Dim>) {}
 
     /// Called after an accepted step.
     fn on_good_step(&mut self, quality: f64);
@@ -153,7 +167,11 @@ where
         // --- Build the linear system at the current parameters ---------------
         DenseVector::set_zero(&mut grad);
         DenseMatrix::set_zero(&mut h);
-        let build = f.eval(P::as_slice(x), Some(&mut grad), Some(&mut h));
+        let build = if algo.needs_hessian() {
+            f.eval(P::as_slice(x), Some(&mut grad), Some(&mut h))
+        } else {
+            f.eval(P::as_slice(x), Some(&mut grad), None)
+        };
 
         if build.num_residuals == 0 {
             reason = StopReason::Skipped;
@@ -169,6 +187,7 @@ where
         sum.num_residuals = build.num_residuals as u16;
         sum.final_cost = build;
         cost = build;
+        algo.on_build(&grad);
 
         // --- First-order stopping criteria ----------------------------------
         let grad_norm2 = to_f64(DenseVector::norm2(&grad));
@@ -181,14 +200,14 @@ where
             reason = StopReason::MinGradNorm;
             break;
         }
-        if build.cost < options.stop.min_error as f64 {
+        if options.stop.min_error > 0.0 && build.cost < options.stop.min_error as f64 {
             reason = StopReason::MinError;
             break;
         }
 
         // --- Solve for the step ---------------------------------------------
         algo.precondition(&mut grad, &mut h);
-        let Some((dx, predicted)) = algo.solve(&grad, &h) else {
+        let Some((mut dx, predicted)) = algo.solve(&grad, &h) else {
             reason = StopReason::SolverFailed;
             break;
         };
@@ -196,6 +215,11 @@ where
             reason = StopReason::SystemHasNanOrInf;
             break;
         }
+
+        if options.line_search.method != LineSearchMethod::None {
+            dx = line_search(x, &dx, build.cost, &grad, &f, options);
+        }
+        algo.update_step(&dx);
 
         let dx_norm2 = to_f64(DenseVector::norm2(&dx));
         let x_norm2 = to_f64(P::norm2(x));
@@ -349,4 +373,127 @@ pub(crate) fn neg_solve<S: Real, D: Dim>(
 #[allow(dead_code)]
 pub(crate) fn linear_method(options: &Options) -> LinearSolverMethod {
     options.linear.method
+}
+
+/// Scale a step by `alpha`.
+fn scaled_step<S: Real, D: Dim>(alpha: f64, dx: &Vector<S, D>) -> Vector<S, D> {
+    let mut out = dx.clone();
+    let a = S::from_f64(alpha).expect("step multiplier fits");
+    DenseVector::scale(&mut out, a);
+    out
+}
+
+/// Cost at `x + alpha * dx`, leaving `x` unchanged.
+fn trial_cost<P, F>(x: &mut P, alpha: f64, dx: &Vector<P::Scalar, P::Dim>, f: &F) -> f64
+where
+    P: Params,
+    F: AccumulationFn<P::Scalar, P::Dim>,
+{
+    let step = scaled_step::<P::Scalar, P::Dim>(alpha, dx);
+    P::plus_eq(x, DenseVector::as_slice(&step));
+    let cost = f.eval(P::as_slice(x), None, None).cost;
+    let mut back = step;
+    DenseVector::scale(&mut back, -P::Scalar::one());
+    P::plus_eq(x, DenseVector::as_slice(&back));
+    cost
+}
+
+/// Backtracking / Wolfe / golden-section search along `dx`.
+///
+/// Mirrors `OptimizerCore::LineSearchStep`: returns the step to apply
+/// (already scaled by the selected `alpha`).
+fn line_search<P, F>(
+    x: &mut P,
+    dx: &Vector<P::Scalar, P::Dim>,
+    f0: f64,
+    grad: &Vector<P::Scalar, P::Dim>,
+    f: &F,
+    options: &Options,
+) -> Vector<P::Scalar, P::Dim>
+where
+    P: Params,
+    F: AccumulationFn<P::Scalar, P::Dim>,
+{
+    let directional = to_f64(DenseVector::dot(grad, dx));
+    if directional >= 0.0 || !directional.is_finite() {
+        return dx.clone();
+    }
+
+    let ls = &options.line_search;
+    let c1 = ls.c1 as f64;
+    let min_step = ls.min_step as f64;
+    let mut alpha = ls.initial_step as f64;
+    let mut best_alpha = alpha;
+
+    match ls.method {
+        LineSearchMethod::None => return dx.clone(),
+        LineSearchMethod::Backtracking => {
+            for _ in 0..ls.max_iters {
+                let f_trial = trial_cost(x, alpha, dx, f);
+                if f_trial.is_finite() && f_trial <= f0 + c1 * alpha * directional {
+                    best_alpha = alpha;
+                    break;
+                }
+                alpha *= ls.contraction as f64;
+                if alpha < min_step {
+                    best_alpha = alpha;
+                    break;
+                }
+            }
+        }
+        LineSearchMethod::Wolfe => {
+            for _ in 0..ls.max_iters {
+                let f_trial = trial_cost(x, alpha, dx, f);
+                if f_trial.is_finite() && f_trial <= f0 + c1 * alpha * directional {
+                    best_alpha = alpha;
+                    break;
+                }
+                let mut next_alpha = alpha * ls.contraction as f64;
+                let denom = 2.0 * (f_trial - f0 - alpha * directional);
+                if f_trial.is_finite() && denom > 0.0 {
+                    let quad_alpha = -directional * alpha * alpha / denom;
+                    next_alpha = quad_alpha.clamp(0.1 * alpha, 0.5 * alpha);
+                }
+                alpha = next_alpha;
+                if alpha < min_step {
+                    best_alpha = alpha;
+                    break;
+                }
+            }
+        }
+        LineSearchMethod::GoldenSection => {
+            const INVPHI: f64 = 0.618_033_988_749_895;
+            const INVPHI2: f64 = 0.381_966_011_250_105;
+            let mut a = 0.0;
+            let mut h = ls.initial_step as f64;
+            if h > min_step {
+                let mut c = a + INVPHI2 * h;
+                let mut d = a + INVPHI * h;
+                let mut fc = trial_cost(x, c, dx, f);
+                let mut fd = trial_cost(x, d, dx, f);
+                for _ in 0..ls.max_iters {
+                    if fc < fd {
+                        d = c;
+                        fd = fc;
+                        h *= INVPHI;
+                        c = a + INVPHI2 * h;
+                        fc = trial_cost(x, c, dx, f);
+                    } else {
+                        a = c;
+                        c = d;
+                        fc = fd;
+                        h *= INVPHI;
+                        d = a + INVPHI * h;
+                        fd = trial_cost(x, d, dx, f);
+                    }
+                    if h < min_step {
+                        break;
+                    }
+                }
+                best_alpha = if fc < fd { c } else { d };
+            }
+        }
+    }
+
+    scaled_step::<P::Scalar, P::Dim>(best_alpha, dx)
 }

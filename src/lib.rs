@@ -73,6 +73,8 @@ compile_error!("enable a backend: `nalgebra` (default) or `faer`");
 pub mod backend;
 pub mod cost;
 pub mod diff;
+pub mod distances;
+pub mod losses;
 pub mod math;
 pub mod optimizers;
 pub mod options;
@@ -85,6 +87,7 @@ mod optimize;
 
 pub use backend::{Dim, Dynamic, Static};
 pub use cost::Cost;
+pub use math::inverse;
 pub use optimize::{optimize, optimize_default};
 #[cfg(feature = "autodiff")]
 pub use optimize::{optimize_residuals, optimize_residuals_default};

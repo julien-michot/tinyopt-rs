@@ -114,6 +114,19 @@ impl Dim for Dynamic {
         let f = Ldlt::new(a.as_mat_ref(), Side::Lower).ok()?;
         Some(f.inverse())
     }
+
+    fn cholesky_lower<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>> {
+        let f = Llt::new(a.as_mat_ref(), Side::Lower).ok()?;
+        let l = f.L();
+        let mut out: Mat<S> = Mat::from_fn(l.nrows(), l.ncols(), |i, j| *l.get(i, j));
+        // Keep only the lower triangle.
+        for j in 0..out.ncols() {
+            for i in 0..j {
+                *out.get_mut(i, j) = S::zero();
+            }
+        }
+        Some(out)
+    }
 }
 
 impl<const N: usize> Dim for Static<N> {
@@ -150,5 +163,10 @@ impl<const N: usize> Dim for Static<N> {
     fn inverse<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>> {
         debug_assert_eq!(a.nrows(), N);
         Dynamic::inverse(a)
+    }
+
+    fn cholesky_lower<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>> {
+        debug_assert_eq!(a.nrows(), N);
+        Dynamic::cholesky_lower(a)
     }
 }

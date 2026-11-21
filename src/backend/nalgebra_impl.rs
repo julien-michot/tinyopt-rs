@@ -155,6 +155,11 @@ impl Dim for Dynamic {
     fn inverse<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>> {
         a.clone().try_inverse()
     }
+
+    fn cholesky_lower<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>> {
+        let chol = Cholesky::new(a.clone())?;
+        Some(chol.l())
+    }
 }
 
 impl<const N: usize> Dim for Static<N> {
@@ -200,5 +205,10 @@ impl<const N: usize> Dim for Static<N> {
 
     fn inverse<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>> {
         a.try_inverse()
+    }
+
+    fn cholesky_lower<S: Real>(a: &Self::Mat<S>) -> Option<Self::Mat<S>> {
+        let chol = Cholesky::new(*a)?;
+        Some(chol.l())
     }
 }
