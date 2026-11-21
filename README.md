@@ -81,7 +81,7 @@ assert!(summary.converged());
 | M2 | GD/CG/BFGS/L-BFGS/DogLeg, line search, losses, distances | ✅ |
 | M3 | direct autodiff accumulation, robust blocks, AD type coverage | ✅ |
 | M4 | fixed params, covariance, multi-params, manifolds | ✅ |
-| M5 | examples, benchmarks, docs parity | ⏳ |
+| M5 | examples, benchmarks, docs parity | ✅ |
 
 ## Losses and distances
 
@@ -109,6 +109,33 @@ let cov = opt.covariance_with(&CovarianceOptions::default());
 
 `optimize2` / `optimize3` run several parameters together (packed internally and
 written back once), and `ParamsWrapper` adapts manifold-style parameter types.
+
+## Examples and benchmarks
+
+The seven dense C++ examples are ported one-to-one:
+
+```shell
+cargo run --example astronomy
+cargo run --example biology
+cargo run --example computer_vision
+cargo run --example finance
+cargo run --example physics
+cargo run --example robotics
+cargo run --example signal_processing
+```
+
+Benchmarks mirror the C++ dense suites (f64/f32, static/dynamic, prior and
+1D/2D/6D profiling workloads):
+
+```shell
+cargo bench --bench dense
+```
+
+## Documentation
+
+- [`docs/TUTORIAL.md`](docs/TUTORIAL.md) – dense tutorial (mirrors the C++ one).
+- [`docs/CPP_API_MAPPING.md`](docs/CPP_API_MAPPING.md) – C++ → Rust API map.
+- `cargo doc --no-deps --open` – rustdoc reference.
 
 ## Development
 

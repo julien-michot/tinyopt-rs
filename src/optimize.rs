@@ -70,6 +70,17 @@ where
     optimize_residuals(x, f, &Options::default())
 }
 
+/// Optimize a scalar cost using forward-mode autodiff.
+#[cfg(feature = "autodiff")]
+pub fn optimize_cost<P, F>(x: &mut P, f: &F, options: &Options) -> Summary
+where
+    P: Params<Scalar = f64>,
+    P::Dim: crate::diff::AdDim,
+    F: crate::diff::CostFn<Scalar = f64> + ?Sized,
+{
+    optimize(x, crate::diff::cost_accumulation(f), options)
+}
+
 /// Optimize robust residual blocks using forward-mode autodiff.
 #[cfg(feature = "autodiff")]
 pub fn optimize_robust_residuals<P, F>(x: &mut P, f: &F, options: &Options) -> Summary

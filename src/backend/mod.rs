@@ -130,7 +130,7 @@ pub trait DenseVector<S: Real>: Clone + core::fmt::Debug + Send + Sync {
 /// Dense square matrix of real scalars.
 ///
 /// Backends may pad the leading dimension (faer does), so matrices are always
-/// accessed through [`DenseMatrix::at`] / [`DenseMatrix::set_at`] rather than a
+/// accessed through [`DenseMatrix::elem`] / [`DenseMatrix::set_elem`] rather than a
 /// contiguous slice.
 pub trait DenseMatrix<S: Real>: Clone + core::fmt::Debug + Send + Sync {
     /// Number of rows.

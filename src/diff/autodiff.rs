@@ -437,6 +437,62 @@ where
     }
 }
 
+/// Accumulation function backed by forward-mode autodiff of a scalar cost.
+///
+/// Mirrors the C++ non-NLLS autodiff path: the cost is the scalar value itself,
+/// the gradient is its derivative, and the Hessian approximation is `g gᵀ`.
+#[derive(Clone, Debug)]
+pub struct CostAccumulator<'a, F: ?Sized> {
+    f: &'a F,
+}
+
+/// Wrap a scalar cost function into an accumulation function.
+pub fn cost_accumulation<F>(f: &F) -> CostAccumulator<'_, F>
+where
+    F: CostFn<Scalar = f64> + ?Sized,
+{
+    CostAccumulator { f }
+}
+
+impl<F, D> AccumulationFn<f64, D> for CostAccumulator<'_, F>
+where
+    F: CostFn<Scalar = f64> + ?Sized,
+    D: AdDim,
+{
+    fn eval(
+        &self,
+        x: &[f64],
+        grad: Option<&mut Vector<f64, D>>,
+        h: Option<&mut Matrix<f64, D>>,
+    ) -> Cost {
+        let jets = D::seed(x);
+        let out = self.f.eval(jets.as_ref());
+        let value = D::value(&out);
+
+        let mut grad = grad;
+        let mut h = h;
+        if let Some(g) = grad.as_mut() {
+            DenseVector::set_zero(*g);
+            if let Some(jac) = D::derivative(&out) {
+                for (i, d) in jac.iter().enumerate() {
+                    g.set_at(i, *d);
+                }
+                if let Some(hm) = h.as_mut() {
+                    DenseMatrix::set_zero(*hm);
+                    DenseMatrix::add_outer_product_self(*hm, 1.0, jac);
+                }
+            }
+        } else if let Some(hm) = h.as_mut() {
+            DenseMatrix::set_zero(*hm);
+            if let Some(jac) = D::derivative(&out) {
+                DenseMatrix::add_outer_product_self(*hm, 1.0, jac);
+            }
+        }
+
+        Cost::new(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

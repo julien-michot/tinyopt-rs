@@ -98,7 +98,7 @@ pub use optimize::{
     optimize3_default,
 };
 #[cfg(feature = "autodiff")]
-pub use optimize::{optimize_residuals, optimize_residuals_default};
+pub use optimize::{optimize_cost, optimize_residuals, optimize_residuals_default};
 pub use optimizers::AccumulationFn;
 pub use options::{LineSearchMethod, Options, Solver};
 pub use params::{Params, ParamsWrapper};

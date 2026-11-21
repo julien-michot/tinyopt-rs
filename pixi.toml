@@ -17,4 +17,6 @@ test-faer = "cargo test --no-default-features --features faer"
 fmt = "cargo fmt --all -- --check"
 clippy = "cargo clippy --all-targets -- -D warnings"
 doc = "cargo doc --no-deps"
+bench = "cargo bench --bench dense"
+examples = "for e in astronomy biology computer_vision finance physics robotics signal_processing; do cargo run -q --example $e || exit 1; done"
 ci = { depends-on = ["fmt", "clippy", "test-nalgebra", "test-faer"] }
