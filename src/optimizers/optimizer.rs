@@ -97,6 +97,11 @@ pub(crate) trait Algorithm<P: Params, H: HessianStorage<P::Scalar>> {
     /// Fixed-parameter set.
     fn fixed(&self) -> &FixedSet;
 
+    /// Short solver state appended to the per-iteration log line.
+    fn state_string(&self) -> String {
+        String::new()
+    }
+
     /// Store the final (un-damped) system for covariance export.
     fn save_final_system(&mut self, _h: &H, _cost: Cost) {}
 
@@ -182,6 +187,7 @@ where
     let mut reason = StopReason::None;
 
     for _iter in 0..max_iters {
+        let iter = sum.num_iters;
         // --- Build the linear system at the current parameters ---------------
         DenseVector::set_zero(&mut grad);
         h.set_zero();
@@ -214,10 +220,6 @@ where
             }
         }
         h.apply_fixed_indices(&fixed);
-
-        if options.log.enable {
-            log::trace!("#{}: cost = {:.6e}", sum.num_iters, build.cost);
-        }
 
         // --- First-order stopping criteria ----------------------------------
         let grad_norm2 = to_f64(DenseVector::norm2(&grad));
@@ -345,6 +347,29 @@ where
             }
         }
 
+        // --- Per-iteration log (one line, C++ format) -----------------------
+        if options.log.enable {
+            let state = algo.state_string();
+            log_iteration(
+                options,
+                &IterationLog {
+                    iter,
+                    num_reduced,
+                    accepted,
+                    prev_cost: build.cost,
+                    trial_cost: trial.cost,
+                    num_residuals: build.num_residuals as u16,
+                    inlier_ratio: trial.inlier_ratio,
+                    dx_norm2,
+                    grad_norm2,
+                    dx: DenseVector::as_slice(&dx),
+                    x: P::as_slice(x),
+                    elapsed_ms: start.elapsed().as_secs_f64() * 1e3,
+                    state: &state,
+                },
+            );
+        }
+
         // --- User and time based stopping criteria --------------------------
         if reason == StopReason::None {
             if let Some(cb) = &options.stop.stop_callback {
@@ -407,7 +432,7 @@ where
     }
 
     if options.log.enable && sum.stop_reason != StopReason::None {
-        log::debug!(
+        log::info!(
             "{}",
             sum.stop_reason
                 .description(Some(options), sum.final_cost.cost)
@@ -556,4 +581,88 @@ where
     }
 
     scaled_step::<P::Scalar, P::Dim>(best_alpha, dx)
+}
+
+/// One iteration of the per-iteration log line.
+struct IterationLog<'a, S> {
+    iter: u16,
+    num_reduced: usize,
+    accepted: bool,
+    prev_cost: f64,
+    trial_cost: f64,
+    num_residuals: u16,
+    inlier_ratio: f32,
+    dx_norm2: f64,
+    grad_norm2: f64,
+    dx: &'a [S],
+    x: &'a [S],
+    elapsed_ms: f64,
+    state: &'a str,
+}
+
+/// Emit the one-line iteration log, mirroring the C++ `TINYOPT_LOG` format.
+fn log_iteration<S: Real>(options: &Options, it: &IterationLog<'_, S>) {
+    use std::fmt::Write;
+
+    let log = &options.log;
+    let mut line = String::with_capacity(160);
+    if log.print_emoji {
+        line.push_str(if !it.accepted {
+            "❌"
+        } else if it.iter == 0 {
+            "ℹ️"
+        } else {
+            "✅"
+        });
+    }
+    let _ = write!(line, "#{} ", it.iter);
+    if log.print_x {
+        line.push_str("x:[");
+        for (i, v) in it.x.iter().enumerate() {
+            if i > 0 {
+                line.push_str(", ");
+            }
+            let _ = write!(line, "{:.5}", to_f64(*v));
+        }
+        line.push_str("] ");
+    } else {
+        let _ = write!(line, "x:ℝ^{} ", it.x.len());
+    }
+    if it.num_reduced > 0 {
+        let _ = write!(line, "r:ℝ^{} ", it.num_reduced);
+    }
+
+    let derr = it.trial_cost - it.prev_cost;
+    let rerr = if it.prev_cost > f64::EPSILON {
+        -derr / it.prev_cost
+    } else {
+        -1.0
+    };
+    let _ = write!(
+        line,
+        "{}:{:.4e} n:{} d{}:{:+.2e} r{}:{:+.1e} ",
+        log.e, it.prev_cost, it.num_residuals, log.e, derr, log.e, rerr
+    );
+    let _ = write!(line, "|δx|:{:.2e} ", it.dx_norm2.sqrt());
+    if log.print_dx {
+        line.push_str("δx:[");
+        for (i, v) in it.dx.iter().enumerate() {
+            if i > 0 {
+                line.push_str(", ");
+            }
+            let _ = write!(line, "{:+.4}", to_f64(*v));
+        }
+        line.push_str("] ");
+    }
+    if options.stop.min_grad_norm2 > 0.0 || options.stop.min_grad_max > 0.0 {
+        let _ = write!(line, "|∇|:{:.2e} ", it.grad_norm2.sqrt());
+    }
+    line.push_str(it.state);
+    if log.print_inliers {
+        let _ = write!(line, "in:{:.2}% ", it.inlier_ratio * 100.0);
+    }
+    if log.print_t {
+        let _ = write!(line, "τ:{:.2} ", it.elapsed_ms);
+    }
+    log::info!("{}", line.trim_end());
 }

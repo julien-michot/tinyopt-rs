@@ -69,6 +69,8 @@ fn logging_behaviour() {
     clear_logs();
 
     let mut options = Options::default();
+    options.log.print_x = true;
+    options.log.print_dx = true;
     options.stop.max_iters = 3;
     options.stop.min_error = 0.0;
     options.stop.min_rerr_dec = 0.0;
@@ -81,7 +83,37 @@ fn logging_behaviour() {
 
     let logs = captured();
     assert!(!logs.is_empty(), "expected per-iteration log messages");
-    assert!(logs.iter().any(|m| m.contains("cost")));
+    // One line per iteration, C++ style: `#<iter> x:... ε²:... n:...`.
+    let iter_lines: Vec<&String> = logs.iter().filter(|m| m.contains("#0 ")).collect();
+    assert_eq!(
+        iter_lines.len(),
+        1,
+        "expected exactly one line for iteration 0"
+    );
+    assert!(
+        iter_lines[0].contains("ε²:"),
+        "cost label missing: {}",
+        iter_lines[0]
+    );
+    assert!(
+        iter_lines[0].contains("|δx|:"),
+        "step norm missing: {}",
+        iter_lines[0]
+    );
+    assert!(
+        iter_lines[0].contains("x:["),
+        "print_x missing: {}",
+        iter_lines[0]
+    );
+    assert!(
+        iter_lines[0].contains("δx:["),
+        "print_dx missing: {}",
+        iter_lines[0]
+    );
+    assert!(
+        logs.iter().any(|m| m.contains("#1 ") || m.contains("#2 ")),
+        "expected one line per iteration, got {logs:?}"
+    );
 
     // Now disable logging and check that nothing new is emitted.
     clear_logs();

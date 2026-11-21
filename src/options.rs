@@ -279,11 +279,15 @@ impl StopCriteria {
 #[derive(Clone, Debug)]
 pub struct LogOptions {
     pub enable: bool,
+    /// Symbol used when logging the error, e.g. `ε`, `ε²` or `√ε`.
+    pub e: std::borrow::Cow<'static, str>,
     pub print_emoji: bool,
     pub print_x: bool,
     pub print_dx: bool,
     pub print_inliers: bool,
     pub print_t: bool,
+    /// Log the maximum of all standard deviations (requires solving `H`).
+    pub print_max_stdev: bool,
     pub print_failure: bool,
 }
 
@@ -291,11 +295,13 @@ impl Default for LogOptions {
     fn default() -> Self {
         Self {
             enable: true,
+            e: std::borrow::Cow::Borrowed("ε²"),
             print_emoji: true,
             print_x: false,
             print_dx: false,
             print_inliers: false,
             print_t: true,
+            print_max_stdev: false,
             print_failure: false,
         }
     }

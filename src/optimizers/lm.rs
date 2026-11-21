@@ -129,6 +129,13 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
         &self.fixed
     }
 
+    fn state_string(&self) -> String {
+        match self.state.as_ref() {
+            Some(state) if state.lambda > 0.0 => format!("○:{:.2e} ", 1.0 / state.lambda),
+            _ => String::new(),
+        }
+    }
+
     fn precondition(&mut self, grad: &mut Vector<P::Scalar, P::Dim>, h: &mut H) {
         let state = self.state.as_mut().expect("reset() must be called first");
         let n = h.dims();
