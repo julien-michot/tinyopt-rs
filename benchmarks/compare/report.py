@@ -371,7 +371,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True, help="Path to results.json")
     parser.add_argument("--output-dir", type=Path, default=None, help="Report directory")
-    parser.add_argument("--format", choices=("html", "md"), default="html")
+    parser.add_argument("--format", choices=("html", "md", "both"), default="html")
     parser.add_argument("--open", action="store_true", help="Open the HTML report")
     parser.add_argument("--plot", action="store_true", help="Show the plots interactively")
     args = parser.parse_args()
@@ -382,16 +382,16 @@ def main() -> int:
     save_csv(records, out / "benchmark-results.csv")
     save_iterations_csv(data.get("iterations", []), out / "benchmark-iterations.csv")
     iterations = data.get("iterations", [])
-    report = (
-        write_html(data, records, iterations, out)
-        if args.format == "html"
-        else write_markdown(data, records, iterations, out)
-    )
-    print(f"Saved {report}")
+    if args.format in ("html", "both"):
+        report = write_html(data, records, iterations, out)
+        print(f"Saved {report}")
+    if args.format in ("md", "both"):
+        report = write_markdown(data, records, iterations, out)
+        print(f"Saved {report}")
     if args.plot:
         plt.show(block=True)
-    if args.open and args.format == "html":
-        webbrowser.open(report.resolve().as_uri())
+    if args.open and args.format in ("html", "both"):
+        webbrowser.open((out / "benchmark-report.html").resolve().as_uri())
     return 0
 
 

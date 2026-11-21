@@ -31,6 +31,6 @@ examples = "for e in astronomy biology computer_vision finance physics robotics 
 ci = { depends-on = ["fmt", "clippy", "test-nalgebra", "test-faer"] }
 bench-quick = { cmd = "cargo run --release --manifest-path benchmarks/compare/Cargo.toml -- run --quick --out benchmarks/compare/results", default-environment = "bench" }
 bench-compare = { cmd = "cargo run --release --manifest-path benchmarks/compare/Cargo.toml -- run --out benchmarks/compare/results", default-environment = "bench" }
-bench-report = { cmd = "python benchmarks/compare/report.py --input benchmarks/compare/results/results.json --output-dir benchmarks/compare/results/report", default-environment = "bench" }
+bench-report = { cmd = "python benchmarks/compare/report.py --input benchmarks/compare/results/results.json --output-dir benchmarks/compare/results/report --format both", default-environment = "bench" }
 bench-cpp = { cmd = "cd ../exp-mop && pixi run build-bench", description = "Build the C++ tinyopt benchmark binary (sibling checkout)" }
 clippy-bench = { cmd = "cargo clippy --manifest-path benchmarks/compare/Cargo.toml --release -- -D warnings", default-environment = "bench" }
