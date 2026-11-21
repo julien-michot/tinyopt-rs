@@ -97,6 +97,10 @@ pub(crate) trait Algorithm<P: Params, H: HessianStorage<P::Scalar>> {
     /// Fixed-parameter set.
     fn fixed(&self) -> &FixedSet;
 
+    /// Record fixed indices coming from the parameter trait (if the explicit
+    /// set was empty), so covariance export can zero their variances.
+    fn set_fixed_indices(&mut self, _indices: &[usize]) {}
+
     /// Short solver state appended to the per-iteration log line.
     fn state_string(&self) -> String {
         String::new()
@@ -169,6 +173,7 @@ where
     } else {
         trait_fixed
     };
+    algo.set_fixed_indices(&fixed);
 
     let mut cost = f.eval(P::as_slice(x), None, None);
     if cost.num_residuals == 0 {

@@ -129,6 +129,12 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
         &self.fixed
     }
 
+    fn set_fixed_indices(&mut self, indices: &[usize]) {
+        if self.fixed.indices().is_empty() {
+            self.fixed.fix(indices);
+        }
+    }
+
     fn state_string(&self) -> String {
         match self.state.as_ref() {
             Some(state) if state.lambda > 0.0 => format!("○:{:.2e} ", 1.0 / state.lambda),

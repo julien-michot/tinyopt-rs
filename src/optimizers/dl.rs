@@ -132,6 +132,12 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
         &self.fixed
     }
 
+    fn set_fixed_indices(&mut self, indices: &[usize]) {
+        if self.fixed.indices().is_empty() {
+            self.fixed.fix(indices);
+        }
+    }
+
     fn precondition(&mut self, _grad: &mut Vector<P::Scalar, P::Dim>, _h: &mut H) {}
 
     fn solve(

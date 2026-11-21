@@ -7,7 +7,7 @@
 //! static dimensions are represented by the same dynamic types, with their
 //! length checked when a static dimension is requested.
 
-use faer::linalg::solvers::{DenseSolveCore, Ldlt, Llt, PartialPivLu, Qr, Svd};
+use faer::linalg::solvers::{DenseSolveCore, Ldlt, Llt, PartialPivLu, Qr};
 use faer::mat::AsMatRef;
 use faer::prelude::*;
 use faer::{Col, Mat, Side};
@@ -69,6 +69,11 @@ impl<S: Real> DenseMatrix<S> for Mat<S> {
     }
 }
 
+/// Scratch requirement for `pseudoinverse_from_svd_with_tolerance`.
+pub(crate) fn pseudo_inverse_scratch<S: Real>(n: usize, par: Par) -> faer::dyn_stack::StackReq {
+    faer::linalg::svd::pseudoinverse_from_svd_scratch::<S>(n, n, par)
+}
+
 impl Dim for Dynamic {
     const VALUE: Option<usize> = None;
 
@@ -104,9 +109,69 @@ impl Dim for Dynamic {
     }
 
     fn solve_svd<S: Real>(a: &Self::Mat<S>, b: &Self::Vec<S>) -> Option<Self::Vec<S>> {
-        let f = Svd::new(a.as_mat_ref()).ok()?;
-        let mut out = b.clone();
-        f.solve_in_place(out.as_mat_mut());
+        // Pseudo-inverse solve with a relative tolerance: faer's `solve_in_place`
+        // divides by exactly zero singular values, producing NaNs on singular
+        // systems.
+        use faer::linalg::svd::{
+            ComputeSvdVectors, pseudoinverse_from_svd_with_tolerance, svd, svd_scratch,
+        };
+
+        let n = a.nrows();
+        if a.ncols() != n || b.nrows() != n {
+            return None;
+        }
+        let par = Par::Seq;
+        let mut s = faer::diag::Diag::<S>::zeros(n);
+        let mut u = Mat::<S>::zeros(n, n);
+        let mut v = Mat::<S>::zeros(n, n);
+        let scratch = svd_scratch::<S>(
+            n,
+            n,
+            ComputeSvdVectors::Full,
+            ComputeSvdVectors::Full,
+            par,
+            Default::default(),
+        );
+        let pinv_scratch = crate::backend::faer_impl::pseudo_inverse_scratch::<S>(n, par);
+        let mut mem = faer::dyn_stack::MemBuffer::new(scratch);
+        {
+            let stack = faer::dyn_stack::MemStack::new(&mut mem);
+            let _ = svd(
+                a.as_mat_ref(),
+                s.as_mut(),
+                Some(u.as_mut()),
+                Some(v.as_mut()),
+                par,
+                stack,
+                Default::default(),
+            );
+        }
+        let mut pinv = Mat::<S>::zeros(n, n);
+        let mut mem = faer::dyn_stack::MemBuffer::new(pinv_scratch);
+        {
+            let stack = faer::dyn_stack::MemStack::new(&mut mem);
+            pseudoinverse_from_svd_with_tolerance(
+                pinv.as_mut(),
+                s.as_ref(),
+                u.as_ref(),
+                v.as_ref(),
+                S::zero(),
+                S::epsilon() * S::from_f64(n as f64).unwrap_or_else(S::one),
+                par,
+                stack,
+            );
+        }
+        let mut out = Col::<S>::zeros(n);
+        for i in 0..n {
+            let mut acc = S::zero();
+            for j in 0..n {
+                acc += pinv[(i, j)] * b.as_slice()[j];
+            }
+            if !acc.is_finite() {
+                return None;
+            }
+            out.as_mut_slice()[i] = acc;
+        }
         Some(out)
     }
 

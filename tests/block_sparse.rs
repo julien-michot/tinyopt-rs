@@ -15,6 +15,7 @@ use tinyopt::optimizers::lm;
 use tinyopt::{Cost, Options, Params, Summary};
 
 block_sparse_types!(TwoThree, [2, 3]);
+block_sparse_types!(Threes, [3]);
 
 type H = BlockSparseMat<TwoThree, f64>;
 type Vx = Vector<f64, Dynamic>;
@@ -256,4 +257,47 @@ fn free_function_entry_point() {
         tinyopt::optimize_block_sparse::<TwoThree, _, _>(&mut x, acc, &Options::default());
     assert!(summary.succeeded());
     let _ = <Matrix<f64, Dynamic> as tinyopt::hessian::HessianStorage<f64>>::zeros(5);
+}
+
+#[test]
+fn tridiagonal_block_layout_matches_block_tridiagonal_solver() {
+    // Mirrors tests/cpp/block_tridiag_block_sparse.cpp: a fully tridiagonal
+    // block-sparse system solves like the dedicated block-tridiagonal solver.
+    use tinyopt::block_tridiag::{BlockTridiagLdlt, BlockTridiagMat};
+    const N: usize = 4;
+    const B: usize = 3;
+
+    let mut block = BlockSparseMat::<Threes, f64>::with_counts(&[N]);
+    let mut tridiag = BlockTridiagMat::<B, f64>::new(N);
+    for i in 0..N {
+        for j in 0..B {
+            block.set_entry(i * B + j, i * B + j, 4.0);
+            tridiag.diagonal(i).set_at(j, j, 4.0);
+        }
+    }
+    for i in 0..N - 1 {
+        for j in 0..B {
+            block.set_entry(i * B + j, (i + 1) * B + j, -1.0);
+            block.set_entry((i + 1) * B + j, i * B + j, -1.0);
+            tridiag.off_diagonal(i).set_at(j, j, -1.0);
+        }
+    }
+
+    let n = N * B;
+    let b: Vec<f64> = (0..n).map(|i| (i as f64) * 0.25 - 1.0).collect();
+
+    let mut ldlt = BlockSparseLdlt::<Threes, f64>::new();
+    assert!(ldlt.analyze(&block, 0));
+    assert!(ldlt.compute(&block));
+    let mut x = vec![0.0; n];
+    assert!(ldlt.solve_into(&block, &b, &mut x));
+
+    let mut tridiag_ldlt = BlockTridiagLdlt::new();
+    assert!(tridiag_ldlt.compute(&tridiag));
+    let mut x_tridiag = vec![0.0; n];
+    assert!(tridiag_ldlt.solve_into(&b, &mut x_tridiag));
+
+    for (a, e) in x.iter().zip(&x_tridiag) {
+        assert_relative_eq!(a, e, epsilon = 1e-9);
+    }
 }
