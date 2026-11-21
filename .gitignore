@@ -1,3 +1,6 @@
 /target
 .pixi
 .DS_Store
+
+/benchmarks/compare/target
+/benchmarks/compare/results

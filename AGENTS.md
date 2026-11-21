@@ -17,6 +17,22 @@
 - `src/losses/`, `src/distances.rs` — norms, robust losses, Mahalanobis,
   activations, distances (M2).
 
+## Cross-library benchmarks
+
+`benchmarks/compare` (independent package) runs tinyopt-rs, Ceres (Rust binding)
+and the C++ tinyopt binary on ported C++ problems, then renders an HTML/Markdown
+report:
+
+```sh
+pixi run bench-quick     # short suite
+pixi run bench-compare   # full suite (100c/50kp needs --full)
+pixi run bench-report    # plots + report under benchmarks/compare/results/report
+```
+
+Keep `benchmarks/compare/src/options.rs` in sync with the C++ `CreateOptions()`
+and the fair-comparison rules; report parameterization differences in the
+generated report notes.
+
 ## Rules
 
 1. **Zero warnings**: `cargo clippy --all-targets -- -D warnings` and

@@ -141,6 +141,22 @@ let summary = optimize_sparse(&mut x, |x, grad, h| {
 - `Params::reduced()` selects the Schur reduced head block
   (`has_reduced`/`num_reduced` on LM, GN and DogLeg).
 
+## Cross-library benchmarks
+
+`benchmarks/compare` compares tinyopt-rs with Ceres (Rust binding) and the C++
+tinyopt binary on the same problems and renders plots plus an HTML/Markdown
+report:
+
+```sh
+pixi run bench-quick     # build + run the short suite
+pixi run bench-compare   # full suite (all sizes except 100c/50kp)
+pixi run bench-report    # HTML report under benchmarks/compare/results/report
+```
+
+Ceres is built from its vendored sources (`ceres-solver` crate, `source`
+feature). The C++ backend runs `tinyopt_bench_tinyopt` from the C++ checkout
+(`cd ../exp-mop && pixi run build-bench`) when available.
+
 ## Examples and benchmarks
 
 The seven dense C++ examples are ported one-to-one:
