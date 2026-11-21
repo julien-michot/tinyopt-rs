@@ -318,6 +318,44 @@ impl<const B: usize, S: Real> BlockTridiagMat<B, S> {
         }
     }
 
+    /// Sparse conversion (full symmetric tridiagonal pattern).
+    pub fn to_sparse(&self) -> crate::sparse::SparseMatrix<S> {
+        let bs = self.block_size;
+        let n = self.dims();
+        let mut triplets = Vec::with_capacity(self.n_blocks * bs * bs * 3);
+        for b in 0..self.n_blocks {
+            for j in 0..bs {
+                for i in 0..bs {
+                    let v = self.diag[b * bs * bs + j * bs + i];
+                    if v != S::zero() {
+                        triplets.push((b * bs + i, b * bs + j, v));
+                    }
+                }
+            }
+            if b + 1 < self.n_blocks {
+                for j in 0..bs {
+                    for i in 0..bs {
+                        let v = self.off[b * bs * bs + j * bs + i];
+                        if v != S::zero() {
+                            triplets.push((b * bs + i, (b + 1) * bs + j, v));
+                            triplets.push(((b + 1) * bs + j, b * bs + i, v));
+                        }
+                    }
+                }
+            }
+        }
+        crate::sparse::SparseMatrix::from_triplets(n, n, &triplets)
+    }
+
+    /// Block-sparse conversion (one block type of size `B`).
+    pub fn to_block_sparse(&self) -> crate::block_sparse::BlockSparseMatX<S> {
+        crate::block_sparse::BlockSparseMatX::from_parts(
+            self.to_sparse(),
+            vec![self.block_size],
+            vec![self.n_blocks],
+        )
+    }
+
     /// Dense conversion.
     pub fn to_dense(&self) -> Matrix<S, Dynamic> {
         let n = self.dims();

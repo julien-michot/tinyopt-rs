@@ -47,6 +47,33 @@ pub fn inverse<S: Real, D: Dim>(m: &Matrix<S, D>) -> Option<Matrix<S, D>> {
     crate::backend::inverse::<S, D>(m)
 }
 
+/// Dense inverse with an SVD pseudo-inverse fallback for singular systems,
+/// matching the robustness of the C++ `Inverse` helper.
+pub fn robust_inverse<S: Real, D: Dim>(m: &Matrix<S, D>) -> Option<Matrix<S, D>> {
+    if m.nrows() == 0 || m.nrows() != m.ncols() {
+        return None;
+    }
+    if let Some(inv) = crate::backend::inverse::<S, D>(m) {
+        let n = inv.nrows();
+        let finite = (0..n).all(|j| (0..n).all(|i| inv.elem(i, j).is_finite()));
+        if finite {
+            return Some(inv);
+        }
+    }
+    // SVD-based pseudo-inverse: solve `A x = e_j` for every column.
+    let n = m.nrows();
+    let mut out = zeros_matrix::<S, D>(n, n);
+    for j in 0..n {
+        let mut e = crate::backend::zeros_vector::<S, D>(n);
+        e.set_at(j, S::one());
+        let x = crate::backend::solve::<S, D>(crate::backend::LinearSolverMethod::Svd, m, &e)?;
+        for i in 0..n {
+            out.set_elem(i, j, x.at(i));
+        }
+    }
+    Some(out)
+}
+
 /// Dense matrix product `a * b`.
 ///
 /// Implemented with explicit loops so it works on every backend; the cost is

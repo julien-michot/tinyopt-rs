@@ -264,6 +264,21 @@ impl<S: Real> SparseMatrix<S> {
         Self::from_triplets(self.nrows, self.ncols, &triplets)
     }
 
+    /// Matrix inverse (dense result pattern), mirroring C++ `Inverse` for
+    /// sparse input.
+    pub fn inverse(&self) -> Option<Self> {
+        if self.nrows() == 0 || self.nrows() != self.ncols() {
+            return None;
+        }
+        let mut solver = crate::sparse::SparseLinearSolvers::<S>::new(
+            crate::options::LinearSolverOptions::default(),
+        );
+        if !solver.analyze(self, 0) || !solver.compute(self) {
+            return None;
+        }
+        solver.inverse(self)
+    }
+
     /// Upper-triangular part, mirrored from the lower triangle when needed.
     pub fn to_upper(&self) -> Self {
         let mut map: BTreeMap<(usize, usize), S> = BTreeMap::new();

@@ -35,6 +35,15 @@ impl<S: Real> SparseLinearSolvers<S> {
         }
     }
 
+    /// Whether the configured method factorizes the dense conversion instead
+    /// of the sparse LDLᵀ (LU, QR and SVD are dense-only, as in Eigen).
+    fn uses_dense(&self) -> bool {
+        matches!(
+            self.options.method,
+            LinearSolverMethod::Lu | LinearSolverMethod::Qr | LinearSolverMethod::Svd
+        )
+    }
+
     /// Analyze the sparsity pattern of `h` with `num_reduced` head parameters.
     pub fn analyze(&mut self, h: &SparseMatrix<S>, num_reduced: usize) -> bool {
         if h.nrows() != h.ncols() || h.nrows() == 0 || num_reduced >= h.nrows() {
@@ -48,6 +57,11 @@ impl<S: Real> SparseLinearSolvers<S> {
             return false;
         }
         self.num_reduced = num_reduced;
+        if self.uses_dense() {
+            self.analyzed = true;
+            self.computed = false;
+            return true;
+        }
         let eliminated = self.eliminated_block(h, num_reduced);
         self.analyzed = self
             .ldlt
@@ -61,6 +75,10 @@ impl<S: Real> SparseLinearSolvers<S> {
         if !self.analyzed {
             return false;
         }
+        if self.uses_dense() {
+            self.computed = true;
+            return true;
+        }
         let eliminated = self.eliminated_block(h, self.num_reduced);
         self.computed = self.ldlt.factorize(&eliminated.to_lower());
         self.computed
@@ -72,6 +90,15 @@ impl<S: Real> SparseLinearSolvers<S> {
             return None;
         }
         let n = h.nrows();
+        if self.uses_dense() {
+            let dense = h.to_dense();
+            let mut b = crate::backend::zeros_vector::<S, Dynamic>(n);
+            for (i, v) in rhs.iter().enumerate() {
+                b.set_at(i, *v);
+            }
+            let x = crate::backend::solve::<S, Dynamic>(self.options.method, &dense, &b)?;
+            return Some((0..n).map(|i| x.at(i)).collect());
+        }
         let nr = self.num_reduced;
         if nr == 0 {
             return self.ldlt.solve(rhs);

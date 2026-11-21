@@ -88,6 +88,7 @@ pub mod real;
 pub mod sparse;
 pub mod stop_reasons;
 pub mod summary;
+pub mod time;
 
 mod optimize;
 

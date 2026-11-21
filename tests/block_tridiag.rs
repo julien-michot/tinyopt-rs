@@ -58,6 +58,29 @@ fn dense_solve_fixed<const B: usize, const N: usize>(
 }
 
 #[test]
+fn sparse_and_block_sparse_conversions() {
+    let m = spd_chain::<2, 4>();
+    let dense = m.to_dense();
+
+    let sparse = m.to_sparse();
+    assert_eq!(sparse.nrows(), m.dims());
+    for j in 0..m.dims() {
+        for i in 0..m.dims() {
+            assert_relative_eq!(sparse.coeff(i, j), dense.elem(i, j), epsilon = 1e-12);
+        }
+    }
+
+    let block = m.to_block_sparse();
+    assert_eq!(block.dims(), m.dims());
+    let block_dense = block.to_dense();
+    for j in 0..m.dims() {
+        for i in 0..m.dims() {
+            assert_relative_eq!(block_dense.elem(i, j), dense.elem(i, j), epsilon = 1e-12);
+        }
+    }
+}
+
+#[test]
 fn matrix_access_and_dense_conversion() {
     let mut m = BlockTridiagMat::<2, f64>::new(3);
     assert_eq!(m.num_blocks(), 3);

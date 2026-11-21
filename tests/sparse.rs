@@ -153,3 +153,30 @@ fn singular_system_fails_cleanly() {
 fn vector_helpers_are_consistent() {
     let _ = <Vector<f64, Dynamic> as DenseVector<f64>>::zeros(1);
 }
+
+#[test]
+fn sparse_solver_honours_dense_only_methods() {
+    let a = chain_spd(8);
+    let b: Vec<f64> = (0..8).map(|i| 1.0 + i as f64).collect();
+    let expected = dense_solve(&a, &b);
+    for method in [
+        LinearSolverMethod::Ldlt,
+        LinearSolverMethod::Lu,
+        LinearSolverMethod::Qr,
+        LinearSolverMethod::Svd,
+        LinearSolverMethod::SuiteSparse,
+        LinearSolverMethod::IncompleteCholesky,
+    ] {
+        let options = tinyopt::options::LinearSolverOptions {
+            method,
+            ..Default::default()
+        };
+        let mut solver = SparseLinearSolvers::<f64>::new(options);
+        assert!(solver.analyze(&a, 0), "analyze failed for {method:?}");
+        assert!(solver.compute(&a), "compute failed for {method:?}");
+        let x = solver.solve(&a, &b).expect("solve");
+        for (a, e) in x.iter().zip(&expected) {
+            assert_relative_eq!(a, e, epsilon = 1e-9);
+        }
+    }
+}
