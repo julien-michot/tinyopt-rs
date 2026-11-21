@@ -868,26 +868,20 @@ impl<T: BlockTypes, S: Real> HessianStorage<S> for BlockSparseMat<T, S> {
         BlockSparseMat::mul_vec_into(self, x, out);
     }
 
+    type SolverCache = crate::sparse::SparseSolverCache<S>;
+
     fn solve_into(
         &self,
         options: &LinearSolverOptions,
         rhs: &[S],
         num_reduced: usize,
         out: &mut [S],
+        cache: &mut crate::sparse::SparseSolverCache<S>,
     ) -> bool {
-        // Convert once per solve and use the scalar sparse Schur solver.
-        let mut solver = SparseLinearSolvers::<S>::new(options.clone());
+        // Convert once per solve; the symbolic analysis is reused when the
+        // sparsity pattern is unchanged.
         let sparse = self.to_sparse();
-        if !solver.analyze(&sparse, num_reduced) || !solver.compute(&sparse) {
-            return false;
-        }
-        match solver.solve(&sparse, rhs) {
-            Some(x) => {
-                out.copy_from_slice(&x);
-                true
-            }
-            None => false,
-        }
+        cache.solve_into(&sparse, options, rhs, num_reduced, out)
     }
 
     fn to_dense(&self) -> Matrix<S, Dynamic> {
@@ -965,24 +959,17 @@ impl<S: Real> HessianStorage<S> for BlockSparseMatX<S> {
         BlockSparseMatX::mul_vec_into(self, x, out);
     }
 
+    type SolverCache = crate::sparse::SparseSolverCache<S>;
+
     fn solve_into(
         &self,
         options: &LinearSolverOptions,
         rhs: &[S],
         num_reduced: usize,
         out: &mut [S],
+        cache: &mut crate::sparse::SparseSolverCache<S>,
     ) -> bool {
-        let mut solver = SparseLinearSolvers::<S>::new(options.clone());
-        if !solver.analyze(&self.sparse, num_reduced) || !solver.compute(&self.sparse) {
-            return false;
-        }
-        match solver.solve(&self.sparse, rhs) {
-            Some(x) => {
-                out.copy_from_slice(&x);
-                true
-            }
-            None => false,
-        }
+        cache.solve_into(&self.sparse, options, rhs, num_reduced, out)
     }
 
     fn to_dense(&self) -> Matrix<S, Dynamic> {

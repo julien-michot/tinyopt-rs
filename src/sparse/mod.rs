@@ -11,7 +11,7 @@ mod solvers;
 pub use amd::minimum_degree;
 pub use ldlt::SimplicialLdl;
 pub use matrix::SparseMatrix;
-pub use solvers::SparseLinearSolvers;
+pub use solvers::{SparseLinearSolvers, SparseSolverCache};
 
 /// Double-precision sparse matrix (C++ `SparseMat`).
 pub type SparseMat = SparseMatrix<f64>;

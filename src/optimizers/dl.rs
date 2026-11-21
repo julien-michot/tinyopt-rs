@@ -29,6 +29,7 @@ pub struct Optimizer<
     final_h: Option<H>,
     final_cost: Cost,
     prototype: Option<H>,
+    cache: H::SolverCache,
     _marker: core::marker::PhantomData<P>,
 }
 
@@ -58,6 +59,7 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
             final_h: None,
             final_cost: Cost::default(),
             prototype: None,
+            cache: H::SolverCache::default(),
             _marker: core::marker::PhantomData,
         }
     }
@@ -158,8 +160,13 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
         let grad_slice = DenseVector::as_slice(grad);
 
         // Gauss-Newton step and Cauchy point.
-        let gauss_newton =
-            neg_solve::<P::Scalar, P::Dim, H>(&self.options, grad, h, self.num_reduced);
+        let gauss_newton = neg_solve::<P::Scalar, P::Dim, H>(
+            &self.options,
+            grad,
+            h,
+            self.num_reduced,
+            &mut self.cache,
+        );
         let hg = h.mul_vec(grad_slice);
         let curvature = (0..n).fold(0.0, |acc, i| {
             acc + grad.at(i).to_f64().unwrap_or(0.0) * hg[i].to_f64().unwrap_or(0.0)

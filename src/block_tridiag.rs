@@ -682,12 +682,15 @@ impl<const B: usize, S: Real> HessianStorage<S> for BlockTridiagMat<B, S> {
         self.mul_vec_into(x, out);
     }
 
+    type SolverCache = ();
+
     fn solve_into(
         &self,
         _options: &LinearSolverOptions,
         rhs: &[S],
         num_reduced: usize,
         out: &mut [S],
+        _cache: &mut (),
     ) -> bool {
         if num_reduced > 0 {
             return false;

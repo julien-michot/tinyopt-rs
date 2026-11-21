@@ -23,6 +23,81 @@ pub struct SparseLinearSolvers<S> {
     num_reduced: usize,
 }
 
+impl<S: Real> Default for SparseLinearSolvers<S> {
+    fn default() -> Self {
+        Self::new(LinearSolverOptions::default())
+    }
+}
+
+/// Symbolic-analysis cache for sparse solves.
+///
+/// The optimizer calls `solve_into` on every iteration with the same sparsity
+/// pattern: keep the analyzed factorization and only refactor the values.
+#[derive(Clone, Debug)]
+pub struct SparseSolverCache<S> {
+    solver: SparseLinearSolvers<S>,
+    pattern: Option<(
+        Vec<usize>,
+        Vec<usize>,
+        usize,
+        crate::backend::LinearSolverMethod,
+    )>,
+}
+
+impl<S: Real> Default for SparseSolverCache<S> {
+    fn default() -> Self {
+        Self {
+            solver: SparseLinearSolvers::default(),
+            pattern: None,
+        }
+    }
+}
+
+impl<S: Real> SparseSolverCache<S> {
+    /// Solve with symbolic reuse when the pattern and options are unchanged.
+    pub fn solve_into(
+        &mut self,
+        h: &SparseMatrix<S>,
+        options: &LinearSolverOptions,
+        rhs: &[S],
+        num_reduced: usize,
+        out: &mut [S],
+    ) -> bool {
+        let reusable = match &self.pattern {
+            Some((col_ptrs, row_indices, reduced, method)) => {
+                *reduced == num_reduced
+                    && *method == options.method
+                    && col_ptrs.as_slice() == h.col_ptrs()
+                    && row_indices.as_slice() == h.row_indices()
+            }
+            None => false,
+        };
+        if !reusable {
+            self.solver = SparseLinearSolvers::new(options.clone());
+            if !self.solver.analyze(h, num_reduced) {
+                self.pattern = None;
+                return false;
+            }
+            self.pattern = Some((
+                h.col_ptrs().to_vec(),
+                h.row_indices().to_vec(),
+                num_reduced,
+                options.method,
+            ));
+        }
+        if !self.solver.compute(h) {
+            return false;
+        }
+        match self.solver.solve(h, rhs) {
+            Some(x) => {
+                out.copy_from_slice(&x);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 impl<S: Real> SparseLinearSolvers<S> {
     /// Create a solver with the given options.
     pub fn new(options: LinearSolverOptions) -> Self {

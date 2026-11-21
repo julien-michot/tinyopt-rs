@@ -452,6 +452,7 @@ pub(crate) fn neg_solve<S: Real, D: Dim, H: HessianStorage<S>>(
     grad: &Vector<S, D>,
     h: &H,
     num_reduced: usize,
+    cache: &mut H::SolverCache,
 ) -> Option<Vector<S, D>> {
     let mut neg_grad = grad.clone();
     DenseVector::scale(&mut neg_grad, -S::one());
@@ -461,6 +462,7 @@ pub(crate) fn neg_solve<S: Real, D: Dim, H: HessianStorage<S>>(
         DenseVector::as_slice(&neg_grad),
         num_reduced,
         DenseVector::as_mut_slice(&mut out),
+        cache,
     );
     if ok { Some(out) } else { None }
 }

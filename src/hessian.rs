@@ -14,10 +14,13 @@ use crate::covariance::{
 };
 use crate::options::LinearSolverOptions;
 use crate::real::Real;
-use crate::sparse::{SparseLinearSolvers, SparseMatrix};
+use crate::sparse::SparseMatrix;
 
 /// Operations the optimizer needs from a Hessian representation.
 pub trait HessianStorage<S: Real>: Clone + core::fmt::Debug + Send + Sync {
+    /// Per-optimizer solver state (symbolic factorization cache, ...).
+    type SolverCache: Default + Clone + core::fmt::Debug;
+
     /// Zeroed storage of the given scalar dimension.
     fn zeros(dims: usize) -> Self;
 
@@ -49,6 +52,7 @@ pub trait HessianStorage<S: Real>: Clone + core::fmt::Debug + Send + Sync {
         rhs: &[S],
         num_reduced: usize,
         out: &mut [S],
+        cache: &mut Self::SolverCache,
     ) -> bool;
 
     /// Matrix-vector product (convenience allocation).
@@ -66,7 +70,8 @@ pub trait HessianStorage<S: Real>: Clone + core::fmt::Debug + Send + Sync {
         num_reduced: usize,
     ) -> Option<Vec<S>> {
         let mut out = vec![S::zero(); rhs.len()];
-        if self.solve_into(options, rhs, num_reduced, &mut out) {
+        let mut cache = Self::SolverCache::default();
+        if self.solve_into(options, rhs, num_reduced, &mut out, &mut cache) {
             Some(out)
         } else {
             None
@@ -231,12 +236,15 @@ mod impls {
                     dense_mul_vec_into(self, x, out);
                 }
 
+                type SolverCache = ();
+
                 fn solve_into(
                     &self,
                     options: &LinearSolverOptions,
                     rhs: &[S],
                     _num_reduced: usize,
                     out: &mut [S],
+                    _cache: &mut (),
                 ) -> bool {
                     dense_solve_into::<S, Dynamic>(self, options, rhs, out)
                 }
@@ -298,12 +306,15 @@ mod impls {
             dense_mul_vec_into(self, x, out);
         }
 
+        type SolverCache = ();
+
         fn solve_into(
             &self,
             options: &LinearSolverOptions,
             rhs: &[S],
             _num_reduced: usize,
             out: &mut [S],
+            _cache: &mut (),
         ) -> bool {
             dense_solve_into::<S, crate::backend::Static<N>>(self, options, rhs, out)
         }
@@ -330,6 +341,8 @@ mod impls {
     use faer::Mat;
 
     impl<S: Real> HessianStorage<S> for Mat<S> {
+        type SolverCache = ();
+
         fn zeros(dims: usize) -> Self {
             Mat::from_fn(dims, dims, |_, _| S::zero())
         }
@@ -372,6 +385,7 @@ mod impls {
             rhs: &[S],
             _num_reduced: usize,
             out: &mut [S],
+            _cache: &mut (),
         ) -> bool {
             dense_solve_into::<S, Dynamic>(self, options, rhs, out)
         }
@@ -435,26 +449,17 @@ impl<S: Real> HessianStorage<S> for SparseMatrix<S> {
         }
     }
 
+    type SolverCache = crate::sparse::SparseSolverCache<S>;
+
     fn solve_into(
         &self,
         options: &LinearSolverOptions,
         rhs: &[S],
         num_reduced: usize,
         out: &mut [S],
+        cache: &mut crate::sparse::SparseSolverCache<S>,
     ) -> bool {
-        let mut solver = SparseLinearSolvers::<S>::new(options.clone());
-        if !solver.analyze(self, num_reduced) || !solver.compute(self) {
-            return false;
-        }
-        match solver.solve(self, rhs) {
-            Some(x) => {
-                for (o, v) in out.iter_mut().zip(x) {
-                    *o = v;
-                }
-                true
-            }
-            None => false,
-        }
+        cache.solve_into(self, options, rhs, num_reduced, out)
     }
 
     fn to_dense(&self) -> Matrix<S, Dynamic> {

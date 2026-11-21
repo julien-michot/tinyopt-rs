@@ -32,6 +32,7 @@ pub struct Optimizer<
     final_h: Option<H>,
     final_cost: Cost,
     prototype: Option<H>,
+    cache: H::SolverCache,
     _marker: core::marker::PhantomData<P>,
 }
 
@@ -72,6 +73,7 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
             final_h: None,
             final_cost: Cost::default(),
             prototype: None,
+            cache: H::SolverCache::default(),
             _marker: core::marker::PhantomData,
         }
     }
@@ -178,7 +180,13 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
         grad: &Vector<P::Scalar, P::Dim>,
         h: &H,
     ) -> Option<Step<P::Scalar, P::Dim>> {
-        let mut step = neg_solve::<P::Scalar, P::Dim, H>(&self.options, grad, h, self.num_reduced)?;
+        let mut step = neg_solve::<P::Scalar, P::Dim, H>(
+            &self.options,
+            grad,
+            h,
+            self.num_reduced,
+            &mut self.cache,
+        )?;
         let state = self.state.as_ref().expect("reset() must be called first");
         let n = step.len();
 

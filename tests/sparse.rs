@@ -180,3 +180,48 @@ fn sparse_solver_honours_dense_only_methods() {
         }
     }
 }
+
+#[test]
+fn sparse_solver_cache_reuses_and_invalidates() {
+    use tinyopt::sparse::SparseSolverCache;
+
+    let options = tinyopt::options::LinearSolverOptions::default();
+    let b: Vec<f64> = (0..8).map(|i| 1.0 + i as f64).collect();
+    let mut cache = SparseSolverCache::<f64>::default();
+    let mut out = vec![0.0; 8];
+
+    // 1) Cold solve: analyzes and factorizes.
+    let a = chain_spd(8);
+    assert!(cache.solve_into(&a, &options, &b, 0, &mut out));
+    let expected = dense_solve(&a, &b);
+    for (x, e) in out.iter().zip(&expected) {
+        assert_relative_eq!(x, e, epsilon = 1e-10);
+    }
+
+    // 2) Same pattern, new values: reuses the symbolic analysis.
+    let mut a2 = a.clone();
+    a2.scale_diagonal(2.0);
+    assert!(cache.solve_into(&a2, &options, &b, 0, &mut out));
+    let expected = dense_solve(&a2, &b);
+    for (x, e) in out.iter().zip(&expected) {
+        assert_relative_eq!(x, e, epsilon = 1e-10);
+    }
+
+    // 3) Different pattern: invalidates and re-analyzes.
+    let mut triplets = Vec::new();
+    for i in 0..8 {
+        triplets.push((i, i, 6.0));
+        if i + 1 < 8 {
+            triplets.push((i + 1, i, -1.0));
+            triplets.push((i, i + 1, -1.0));
+        }
+    }
+    triplets.push((4, 0, -0.5));
+    triplets.push((0, 4, -0.5));
+    let a3 = SparseMatrix::<f64>::from_triplets(8, 8, &triplets);
+    assert!(cache.solve_into(&a3, &options, &b, 0, &mut out));
+    let expected = dense_solve(&a3, &b);
+    for (x, e) in out.iter().zip(&expected) {
+        assert_relative_eq!(x, e, epsilon = 1e-10);
+    }
+}
