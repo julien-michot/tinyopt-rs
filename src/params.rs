@@ -133,6 +133,54 @@ mod faer_params {
     }
 }
 
+impl<S: Real> Params for Vec<S> {
+    type Scalar = S;
+    type Dim = Dynamic;
+
+    fn dims(&self) -> usize {
+        self.len()
+    }
+
+    fn as_slice(&self) -> &[S] {
+        self
+    }
+
+    fn plus_eq(&mut self, delta: &[S]) {
+        assert_eq!(delta.len(), self.len(), "parameter dimension mismatch");
+        for (p, d) in self.iter_mut().zip(delta) {
+            *p += *d;
+        }
+    }
+
+    fn norm2(&self) -> S {
+        self.iter().fold(S::zero(), |acc, v| acc + *v * *v)
+    }
+}
+
+impl<S: Real, const N: usize> Params for [S; N] {
+    type Scalar = S;
+    type Dim = Static<N>;
+
+    fn dims(&self) -> usize {
+        N
+    }
+
+    fn as_slice(&self) -> &[S] {
+        self
+    }
+
+    fn plus_eq(&mut self, delta: &[S]) {
+        assert_eq!(delta.len(), N, "parameter dimension mismatch");
+        for (p, d) in self.iter_mut().zip(delta) {
+            *p += *d;
+        }
+    }
+
+    fn norm2(&self) -> S {
+        self.iter().fold(S::zero(), |acc, v| acc + *v * *v)
+    }
+}
+
 impl Params for f64 {
     type Scalar = f64;
     type Dim = Static<1>;

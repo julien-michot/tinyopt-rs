@@ -27,7 +27,8 @@ cargo test --no-default-features --features faer,autodiff
 
 - `autodiff` (default): forward-mode AD through
   [`num-dual`](https://docs.rs/num-dual). `DualVec<T, D>` is the Rust equivalent of
-  tinyopt's `Jet<T, N>`.
+  tinyopt's `Jet<T, N>`. Accumulation is direct (`Jᵀr` / `JᵀJ` per residual) and the
+  static-dimension path uses stack-allocated dual numbers.
 - `numdiff`: forward, central, and fast-central finite differences.
 
 User functions are generic over the scalar, so a single implementation serves both
@@ -78,7 +79,7 @@ assert!(summary.converged());
 | M0 | scaffold, backend abstraction, params, num-dual autodiff | ✅ |
 | M1 | Cost/Summary/Options, LM/GN, numdiff, gradient checks | ✅ |
 | M2 | GD/CG/BFGS/L-BFGS/DogLeg, line search, losses, distances | ✅ |
-| M3 | autodiff optimizer adapter, diffusion tests | ⏳ |
+| M3 | direct autodiff accumulation, robust blocks, AD type coverage | ✅ |
 | M4 | fixed params, covariance, multi-params, manifolds | ⏳ |
 | M5 | examples, benchmarks, docs parity | ⏳ |
 

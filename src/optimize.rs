@@ -45,6 +45,7 @@ where
 pub fn optimize_residuals<P, F>(x: &mut P, f: &F, options: &Options) -> Summary
 where
     P: Params<Scalar = f64>,
+    P::Dim: crate::diff::AdDim,
     F: crate::diff::ResidualsFn<Scalar = f64> + ?Sized,
 {
     optimize(x, crate::diff::ad_accumulation(f), options)
@@ -55,7 +56,19 @@ where
 pub fn optimize_residuals_default<P, F>(x: &mut P, f: &F) -> Summary
 where
     P: Params<Scalar = f64>,
+    P::Dim: crate::diff::AdDim,
     F: crate::diff::ResidualsFn<Scalar = f64> + ?Sized,
 {
     optimize_residuals(x, f, &Options::default())
+}
+
+/// Optimize robust residual blocks using forward-mode autodiff.
+#[cfg(feature = "autodiff")]
+pub fn optimize_robust_residuals<P, F>(x: &mut P, f: &F, options: &Options) -> Summary
+where
+    P: Params<Scalar = f64>,
+    P::Dim: crate::diff::AdDim,
+    F: crate::diff::RobustResidualsFn<Scalar = f64> + ?Sized,
+{
+    optimize(x, crate::diff::robust_accumulation(f), options)
 }

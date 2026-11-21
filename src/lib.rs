@@ -88,6 +88,8 @@ mod optimize;
 pub use backend::{Dim, Dynamic, Static};
 pub use cost::Cost;
 pub use math::inverse;
+#[cfg(feature = "autodiff")]
+pub use optimize::optimize_robust_residuals;
 pub use optimize::{optimize, optimize_default};
 #[cfg(feature = "autodiff")]
 pub use optimize::{optimize_residuals, optimize_residuals_default};

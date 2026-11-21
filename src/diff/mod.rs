@@ -16,8 +16,9 @@ pub mod num_diff;
 
 #[cfg(feature = "autodiff")]
 pub use autodiff::{
-    AdAccumulator, CostAndGradient, CostFn, ResidualsAndJacobian, ResidualsFn, ad_accumulation,
-    cost_and_gradient, residuals_and_jacobian,
+    AdAccumulator, AdDim, CostAndGradient, CostFn, ResidualBlock, ResidualsAndJacobian,
+    ResidualsFn, RobustAdAccumulator, RobustLoss, RobustResidualsFn, ad_accumulation,
+    calculate_jac, cost_and_gradient, eval, residuals_and_jacobian, robust_accumulation,
 };
 pub use gradient_check::{check_gradient, check_residuals_gradient, default_eps};
 pub use num_diff::{
