@@ -20,6 +20,12 @@ use crate::sparse::{SparseLinearSolvers, SparseMatrix};
 pub trait HessianStorage<S: Real>: Clone + core::fmt::Debug + Send + Sync {
     /// Zeroed storage of the given scalar dimension.
     fn zeros(dims: usize) -> Self;
+
+    /// Zeroed storage shaped like `prototype` (for dynamic layouts).
+    fn zeros_like(prototype: &Self, dims: usize) -> Self {
+        let _ = prototype;
+        Self::zeros(dims)
+    }
     /// Scalar dimension.
     fn dims(&self) -> usize;
     /// Zero all stored values, keeping the allocation.
@@ -44,13 +50,6 @@ pub trait HessianStorage<S: Real>: Clone + core::fmt::Debug + Send + Sync {
         num_reduced: usize,
         out: &mut [S],
     ) -> bool;
-
-    /// Diagonal coefficients (convenience allocation).
-    fn diagonal(&self) -> Vec<S> {
-        let mut out = vec![S::zero(); self.dims()];
-        self.diagonal_into(&mut out);
-        out
-    }
 
     /// Matrix-vector product (convenience allocation).
     fn mul_vec(&self, x: &[S]) -> Vec<S> {

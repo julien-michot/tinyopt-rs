@@ -70,6 +70,11 @@ pub(crate) trait Algorithm<P: Params, H: HessianStorage<P::Scalar>> {
     /// Number of reduced (head) parameters for the Schur solve.
     fn set_num_reduced(&mut self, _num_reduced: usize) {}
 
+    /// Hessian prototype used to shape dynamic block layouts.
+    fn hessian_prototype(&self) -> Option<&H> {
+        None
+    }
+
     /// Called after each accumulation, with the newly built gradient.
     fn on_build(&mut self, _grad: &Vector<P::Scalar, P::Dim>) {}
 
@@ -130,7 +135,10 @@ where
     }
 
     let mut grad = zeros_vector::<P::Scalar, P::Dim>(dims);
-    let mut h = H::zeros(dims);
+    let mut h = match algo.hessian_prototype() {
+        Some(prototype) => H::zeros_like(prototype, dims),
+        None => H::zeros(dims),
+    };
     algo.reset(dims);
 
     // Reduced (Schur) block: the C++ contract requires it at the head.
@@ -381,7 +389,10 @@ where
     // Store the final system so that covariance is available to optimizer
     // objects even when no export was requested.
     if algo.needs_hessian() {
-        let mut final_h = H::zeros(dims);
+        let mut final_h = match algo.hessian_prototype() {
+            Some(prototype) => H::zeros_like(prototype, dims),
+            None => H::zeros(dims),
+        };
         let _ = f.eval(P::as_slice(x), None, Some(&mut final_h));
         final_h.apply_fixed_indices(&fixed);
         algo.save_final_system(&final_h, sum.final_cost);

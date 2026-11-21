@@ -31,6 +31,8 @@ pub enum FinalCovariance {
     Dense(Matrix<f32, Dynamic>),
     /// Sparse covariance.
     Sparse(SparseMatrix<f32>),
+    /// Block-tridiagonal covariance.
+    BlockTridiag(crate::block_tridiag::BlockTridiagMat<0, f32>),
 }
 
 impl FinalCovariance {
@@ -38,15 +40,15 @@ impl FinalCovariance {
     pub fn as_dense(&self) -> Option<&Matrix<f32, Dynamic>> {
         match self {
             FinalCovariance::Dense(m) => Some(m),
-            FinalCovariance::Sparse(_) => None,
+            FinalCovariance::Sparse(_) | FinalCovariance::BlockTridiag(_) => None,
         }
     }
 
     /// Sparse view, when available.
     pub fn as_sparse(&self) -> Option<&SparseMatrix<f32>> {
         match self {
-            FinalCovariance::Dense(_) => None,
             FinalCovariance::Sparse(m) => Some(m),
+            FinalCovariance::Dense(_) | FinalCovariance::BlockTridiag(_) => None,
         }
     }
 
@@ -60,6 +62,7 @@ impl FinalCovariance {
         match self {
             FinalCovariance::Dense(m) => m.elem(i, j),
             FinalCovariance::Sparse(m) => m.coeff(i, j),
+            FinalCovariance::BlockTridiag(m) => m.get(i, j),
         }
     }
 }

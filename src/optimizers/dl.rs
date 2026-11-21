@@ -28,6 +28,7 @@ pub struct Optimizer<
     num_reduced: usize,
     final_h: Option<H>,
     final_cost: Cost,
+    prototype: Option<H>,
     _marker: core::marker::PhantomData<P>,
 }
 
@@ -41,6 +42,12 @@ struct State {
 impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
     impl_fixed_api!();
 
+    /// Provide a Hessian prototype (required for dynamic block layouts).
+    pub fn init_with(&mut self, prototype: H) -> &mut Self {
+        self.prototype = Some(prototype);
+        self
+    }
+
     /// Create an optimizer with the given options.
     pub fn new(options: Options) -> Self {
         Self {
@@ -50,6 +57,7 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
             num_reduced: 0,
             final_h: None,
             final_cost: Cost::default(),
+            prototype: None,
             _marker: core::marker::PhantomData,
         }
     }
@@ -114,6 +122,10 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
 
     fn set_num_reduced(&mut self, num_reduced: usize) {
         self.num_reduced = num_reduced;
+    }
+
+    fn hessian_prototype(&self) -> Option<&H> {
+        self.prototype.as_ref()
     }
 
     fn fixed(&self) -> &FixedSet {
