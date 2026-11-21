@@ -79,11 +79,11 @@ impl<S: Real, const N: usize> DenseMatrix<S> for SMatrix<S, N, N> {
         SMatrix::zeros()
     }
 
-    fn at(&self, i: usize, j: usize) -> S {
+    fn elem(&self, i: usize, j: usize) -> S {
         self[(i, j)]
     }
 
-    fn set_at(&mut self, i: usize, j: usize, v: S) {
+    fn set_elem(&mut self, i: usize, j: usize, v: S) {
         self[(i, j)] = v;
     }
 }
@@ -101,11 +101,11 @@ impl<S: Real> DenseMatrix<S> for DMatrix<S> {
         DMatrix::zeros(nrows, ncols)
     }
 
-    fn at(&self, i: usize, j: usize) -> S {
+    fn elem(&self, i: usize, j: usize) -> S {
         self[(i, j)]
     }
 
-    fn set_at(&mut self, i: usize, j: usize, v: S) {
+    fn set_elem(&mut self, i: usize, j: usize, v: S) {
         self[(i, j)] = v;
     }
 }
@@ -117,7 +117,7 @@ fn svd_eps<S: Real, M: DenseMatrix<S>>(a: &M) -> S {
     let mut max_sv = S::zero();
     for j in 0..a.ncols() {
         for i in 0..a.nrows() {
-            let s = Float::abs(a.at(i, j));
+            let s = Float::abs(a.elem(i, j));
             if s > max_sv {
                 max_sv = s;
             }

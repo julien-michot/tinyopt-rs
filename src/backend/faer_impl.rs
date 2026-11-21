@@ -58,13 +58,13 @@ impl<S: Real> DenseMatrix<S> for Mat<S> {
         Mat::from_fn(nrows, ncols, |_, _| S::zero())
     }
 
-    fn at(&self, i: usize, j: usize) -> S {
+    fn elem(&self, i: usize, j: usize) -> S {
         // faer pads the leading dimension (`col_stride` may exceed `nrows`),
         // so branches must go through `get`/`get_mut` rather than a slice.
         *self.get(i, j)
     }
 
-    fn set_at(&mut self, i: usize, j: usize, v: S) {
+    fn set_elem(&mut self, i: usize, j: usize, v: S) {
         *self.get_mut(i, j) = v;
     }
 }

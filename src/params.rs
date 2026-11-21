@@ -23,6 +23,12 @@ pub trait Params {
     /// Runtime number of parameters (scalar degrees of freedom).
     fn dims(&self) -> usize;
 
+    /// Flat view of the scalar parameters.
+    ///
+    /// Vector-like parameters return their contiguous storage; scalar
+    /// parameters return a one-element slice.
+    fn as_slice(&self) -> &[Self::Scalar];
+
     /// Manifold-aware in-place update `self += delta`.
     ///
     /// For Euclidean parameters this is a plain coefficient-wise addition.
@@ -53,6 +59,10 @@ mod nalgebra_params {
             N
         }
 
+        fn as_slice(&self) -> &[S] {
+            DenseVector::as_slice(self)
+        }
+
         fn plus_eq(&mut self, delta: &[S]) {
             assert_eq!(delta.len(), N, "parameter dimension mismatch");
             for (p, d) in self.iter_mut().zip(delta) {
@@ -71,6 +81,10 @@ mod nalgebra_params {
 
         fn dims(&self) -> usize {
             DenseVector::len(self)
+        }
+
+        fn as_slice(&self) -> &[S] {
+            DenseVector::as_slice(self)
         }
 
         fn plus_eq(&mut self, delta: &[S]) {
@@ -100,6 +114,10 @@ mod faer_params {
             DenseVector::len(self)
         }
 
+        fn as_slice(&self) -> &[S] {
+            DenseVector::as_slice(self)
+        }
+
         fn plus_eq(&mut self, delta: &[S]) {
             assert_eq!(delta.len(), self.len(), "parameter dimension mismatch");
             for (p, d) in self.as_mut_slice().iter_mut().zip(delta) {
@@ -108,7 +126,7 @@ mod faer_params {
         }
 
         fn norm2(&self) -> S {
-            self.as_slice()
+            DenseVector::as_slice(self)
                 .iter()
                 .fold(S::zero(), |acc, v| acc + *v * *v)
         }
@@ -121,6 +139,10 @@ impl Params for f64 {
 
     fn dims(&self) -> usize {
         1
+    }
+
+    fn as_slice(&self) -> &[f64] {
+        std::slice::from_ref(self)
     }
 
     fn plus_eq(&mut self, delta: &[f64]) {
@@ -138,6 +160,10 @@ impl Params for f32 {
 
     fn dims(&self) -> usize {
         1
+    }
+
+    fn as_slice(&self) -> &[f32] {
+        std::slice::from_ref(self)
     }
 
     fn plus_eq(&mut self, delta: &[f32]) {

@@ -11,11 +11,18 @@
 
 #[cfg(feature = "autodiff")]
 pub mod autodiff;
+pub mod gradient_check;
+pub mod num_diff;
 
 #[cfg(feature = "autodiff")]
 pub use autodiff::{
-    CostAndGradient, CostFn, ResidualsAndJacobian, ResidualsFn, cost_and_gradient,
-    residuals_and_jacobian,
+    AdAccumulator, CostAndGradient, CostFn, ResidualsAndJacobian, ResidualsFn, ad_accumulation,
+    cost_and_gradient, residuals_and_jacobian,
+};
+pub use gradient_check::{check_gradient, check_residuals_gradient, default_eps};
+pub use num_diff::{
+    Method, NumDiffAccumulator, NumDiffCostAccumulator, create_num_diff_cost_func,
+    create_num_diff_func, estimate_num_jac, num_eval,
 };
 
 #[cfg(feature = "autodiff")]

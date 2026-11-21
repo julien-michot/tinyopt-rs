@@ -28,7 +28,7 @@ cargo test --no-default-features --features faer,autodiff
 - `autodiff` (default): forward-mode AD through
   [`num-dual`](https://docs.rs/num-dual). `DualVec<T, D>` is the Rust equivalent of
   tinyopt's `Jet<T, N>`.
-- `numdiff`: central finite differences (planned, M1).
+- `numdiff`: forward, central, and fast-central finite differences.
 
 User functions are generic over the scalar, so a single implementation serves both
 plain evaluation and autodiff:
@@ -47,12 +47,36 @@ impl ResidualsFn for Sqrt2 {
 }
 ```
 
+## Quick start
+
+```rust
+use tinyopt_rs::backend::{DenseVector, Vector};
+use tinyopt_rs::diff::{DualNum, ResidualsFn};
+use tinyopt_rs::{Options, Static, optimize_residuals};
+
+struct Sqrt2;
+
+impl ResidualsFn for Sqrt2 {
+    type Scalar = f64;
+
+    fn eval<T: DualNum<Primitive = f64>>(&self, x: &[T]) -> Vec<T> {
+        let x0 = x[0].clone();
+        vec![x0.clone() * x0 - 2.0]
+    }
+}
+
+let mut x = <Vector<f64, Static<1>> as DenseVector<f64>>::zeros(1);
+x.set_at(0, 1.0);
+let summary = optimize_residuals(&mut x, &Sqrt2, &Options::default());
+assert!(summary.converged());
+```
+
 ## Status
 
 | Milestone | Scope | Status |
 |---|---|---|
 | M0 | scaffold, backend abstraction, params, num-dual autodiff | ✅ |
-| M1 | core types, LM/GN, dense solvers, numdiff, gradient checks | ⏳ |
+| M1 | Cost/Summary/Options, LM/GN, numdiff, gradient checks | ✅ |
 | M2 | GD/CG/BFGS/L-BFGS/DogLeg, line search, losses, distances | ⏳ |
 | M3 | autodiff optimizer adapter, diffusion tests | ⏳ |
 | M4 | fixed params, covariance, multi-params, manifolds | ⏳ |

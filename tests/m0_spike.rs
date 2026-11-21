@@ -22,7 +22,7 @@ fn mat<M: DenseMatrix<f64>>(rows: &[&[f64]]) -> M {
     let mut m = <M as DenseMatrix<f64>>::zeros(r, c);
     for (i, row) in rows.iter().enumerate() {
         for (j, v) in row.iter().enumerate() {
-            m.set_at(i, j, *v);
+            m.set_elem(i, j, *v);
         }
     }
     m
@@ -42,7 +42,7 @@ fn mat_vec<M: DenseMatrix<f64>, V: DenseVector<f64>>(a: &M, x: &V) -> V {
     for i in 0..n {
         let mut acc = 0.0;
         for j in 0..n {
-            acc += a.at(i, j) * x.at(j);
+            acc += a.elem(i, j) * x.at(j);
         }
         out.set_at(i, acc);
     }
@@ -88,16 +88,16 @@ fn outer_product_accumulation() {
     let mut h = zeros_matrix::<f64, Static<3>>(3, 3);
     let j = [1.0, 2.0, 0.0];
     DenseMatrix::add_outer_product_self(&mut h, 1.0, &j);
-    assert_relative_eq!(h.at(0, 0), 1.0);
-    assert_relative_eq!(h.at(0, 1), 2.0);
-    assert_relative_eq!(h.at(1, 1), 4.0);
-    assert_relative_eq!(h.at(2, 2), 0.0);
+    assert_relative_eq!(h.elem(0, 0), 1.0);
+    assert_relative_eq!(h.elem(0, 1), 2.0);
+    assert_relative_eq!(h.elem(1, 1), 4.0);
+    assert_relative_eq!(h.elem(2, 2), 0.0);
 
     // H += a * x * y^T
     let x = [1.0, 0.0, 0.0];
     let y = [0.0, 3.0, 0.0];
     DenseMatrix::add_outer_product(&mut h, 0.5, &x, &y);
-    assert_relative_eq!(h.at(0, 1), 2.0 + 1.5);
+    assert_relative_eq!(h.elem(0, 1), 2.0 + 1.5);
 }
 
 #[test]
@@ -106,14 +106,14 @@ fn matrix_access_roundtrip_is_asymmetric_safe() {
     // pads its leading dimension, so slices cannot be assumed contiguous).
     type M2 = Matrix<f64, Static<2>>;
     let mut m: M2 = zeros_matrix::<f64, Static<2>>(2, 2);
-    m.set_at(0, 0, 1.0);
-    m.set_at(0, 1, 2.0);
-    m.set_at(1, 0, 3.0);
-    m.set_at(1, 1, 4.0);
-    assert_relative_eq!(m.at(0, 0), 1.0);
-    assert_relative_eq!(m.at(0, 1), 2.0);
-    assert_relative_eq!(m.at(1, 0), 3.0);
-    assert_relative_eq!(m.at(1, 1), 4.0);
+    m.set_elem(0, 0, 1.0);
+    m.set_elem(0, 1, 2.0);
+    m.set_elem(1, 0, 3.0);
+    m.set_elem(1, 1, 4.0);
+    assert_relative_eq!(m.elem(0, 0), 1.0);
+    assert_relative_eq!(m.elem(0, 1), 2.0);
+    assert_relative_eq!(m.elem(1, 0), 3.0);
+    assert_relative_eq!(m.elem(1, 1), 4.0);
 
     // A non-symmetric solve with LU: [[2, 1], [0, 3]] x = [5, 9] -> x = [1, 3].
     let a = mat::<M2>(&[&[2.0, 1.0], &[0.0, 3.0]]);
@@ -176,7 +176,7 @@ fn inverse_roundtrip() {
         for j in 0..2 {
             let mut acc = 0.0;
             for k in 0..2 {
-                acc += a.at(i, k) * inv.at(k, j);
+                acc += a.elem(i, k) * inv.elem(k, j);
             }
             let expected = if i == j { 1.0 } else { 0.0 };
             assert_relative_eq!(acc, expected, epsilon = 1e-12);

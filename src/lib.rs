@@ -25,13 +25,42 @@
 //!   tinyopt's `Jet` (Ceres-style dual numbers).
 //! - `numdiff`: central finite differences.
 //!
-//! ## Status
+//! ## Example
 //!
-//! M0 scaffolding: backend abstraction, parameter traits, differentiation
-//! entry points.
+//! ```no_run
+//! use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+//! use tinyopt_rs::{Cost, Options, Static, optimize};
+//!
+//! type Vec2 = Vector<f64, Static<2>>;
+//! type Mat2 = Matrix<f64, Static<2>>;
+//!
+//! // Minimize (x0² - 2)² + (x0*x1 - 3)² with a manual accumulation function.
+//! let acc = |x: &[f64], grad: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
+//!     let r0 = x[0] * x[0] - 2.0;
+//!     let r1 = x[0] * x[1] - 3.0;
+//!     if let Some(g) = grad {
+//!         g.set_at(0, 2.0 * x[0] * r0 + x[1] * r1);
+//!         g.set_at(1, x[0] * r1);
+//!     }
+//!     if let Some(h) = h {
+//!         let h00 = 4.0 * x[0] * x[0] + x[1] * x[1];
+//!         let h01 = 2.0 * x[0] * x[1] + x[0] * x[1];
+//!         h.set_elem(0, 0, h00);
+//!         h.set_elem(0, 1, h01);
+//!         h.set_elem(1, 0, h01);
+//!         h.set_elem(1, 1, x[0] * x[0]);
+//!     }
+//!     Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
+//! };
+//!
+//! let mut x = <Vec2 as tinyopt_rs::backend::DenseVector<f64>>::zeros(2);
+//! x.set_at(0, 1.0);
+//! x.set_at(1, 1.0);
+//! let summary = optimize(&mut x, acc, &Options::default());
+//! assert!(summary.succeeded());
+//! ```
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![deny(missing_debug_implementations)]
 
 #[cfg(all(feature = "nalgebra", feature = "faer"))]
 compile_error!(
@@ -42,13 +71,29 @@ compile_error!(
 compile_error!("enable a backend: `nalgebra` (default) or `faer`");
 
 pub mod backend;
+pub mod cost;
 pub mod diff;
+pub mod math;
+pub mod optimizers;
+pub mod options;
 pub mod params;
 pub mod real;
+pub mod stop_reasons;
+pub mod summary;
+
+mod optimize;
 
 pub use backend::{Dim, Dynamic, Static};
+pub use cost::Cost;
+pub use optimize::{optimize, optimize_default};
+#[cfg(feature = "autodiff")]
+pub use optimize::{optimize_residuals, optimize_residuals_default};
+pub use optimizers::AccumulationFn;
+pub use options::{LineSearchMethod, Options, Solver};
 pub use params::Params;
 pub use real::Real;
+pub use stop_reasons::StopReason;
+pub use summary::{History, Summary};
 
 /// Library version, kept in sync with the C++ tinyopt release.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

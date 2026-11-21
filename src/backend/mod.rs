@@ -140,16 +140,16 @@ pub trait DenseMatrix<S: Real>: Clone + core::fmt::Debug + Send + Sync {
     fn zeros(nrows: usize, ncols: usize) -> Self;
 
     /// Coefficient accessor.
-    fn at(&self, i: usize, j: usize) -> S;
+    fn elem(&self, i: usize, j: usize) -> S;
     /// Coefficient mutator.
-    fn set_at(&mut self, i: usize, j: usize, v: S);
+    fn set_elem(&mut self, i: usize, j: usize, v: S);
 
     /// Set all coefficients to zero.
     fn set_zero(&mut self) {
         let (r, c) = (self.nrows(), self.ncols());
         for j in 0..c {
             for i in 0..r {
-                self.set_at(i, j, S::zero());
+                self.set_elem(i, j, S::zero());
             }
         }
     }
@@ -169,8 +169,8 @@ pub trait DenseMatrix<S: Real>: Clone + core::fmt::Debug + Send + Sync {
                 continue;
             }
             for (i, xi) in x.iter().enumerate() {
-                let v = self.at(i, j) + ay * *xi;
-                self.set_at(i, j, v);
+                let v = self.elem(i, j) + ay * *xi;
+                self.set_elem(i, j, v);
             }
         }
     }

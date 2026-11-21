@@ -92,7 +92,7 @@ fn seeded_jets(x: &[f64]) -> Vec<DualVec<f64, Dyn>> {
 /// Evaluate residuals and the full Jacobian at `x` using forward-mode autodiff.
 pub fn residuals_and_jacobian<F>(f: &F, x: &[f64]) -> ResidualsAndJacobian
 where
-    F: ResidualsFn<Scalar = f64>,
+    F: ResidualsFn<Scalar = f64> + ?Sized,
 {
     let jets = seeded_jets(x);
     let out = f.eval(&jets);
@@ -121,7 +121,7 @@ where
 /// Evaluate a scalar cost and its gradient at `x` using forward-mode autodiff.
 pub fn cost_and_gradient<F>(f: &F, x: &[f64]) -> CostAndGradient
 where
-    F: CostFn<Scalar = f64>,
+    F: CostFn<Scalar = f64> + ?Sized,
 {
     let jets = seeded_jets(x);
     let out = f.eval(&jets);
@@ -142,10 +142,70 @@ where
     }
 }
 
+use crate::backend::{DenseMatrix, DenseVector, Dim, Matrix, Vector};
+use crate::cost::Cost;
+use crate::optimizers::AccumulationFn;
+
+/// Accumulation function backed by forward-mode autodiff of residuals.
+///
+/// This is the Rust equivalent of passing a residuals lambda to the C++
+/// `Optimize` entry point: the Jacobian is computed with dual numbers and
+/// accumulated directly into `Jᵀr` and `JᵀJ`.
+#[derive(Clone, Debug)]
+pub struct AdAccumulator<'a, F: ?Sized> {
+    f: &'a F,
+}
+
+/// Wrap a residuals function into an accumulation function.
+pub fn ad_accumulation<F>(f: &F) -> AdAccumulator<'_, F>
+where
+    F: ResidualsFn<Scalar = f64> + ?Sized,
+{
+    AdAccumulator { f }
+}
+
+impl<F, D> AccumulationFn<f64, D> for AdAccumulator<'_, F>
+where
+    F: ResidualsFn<Scalar = f64> + ?Sized,
+    D: Dim,
+{
+    fn eval(
+        &self,
+        x: &[f64],
+        grad: Option<&mut Vector<f64, D>>,
+        h: Option<&mut Matrix<f64, D>>,
+    ) -> Cost {
+        let out = residuals_and_jacobian(self.f, x);
+        let (m, n) = (out.num_residuals, out.num_params);
+        let cost = Cost::from_residuals(&out.residuals);
+
+        if let Some(g) = grad {
+            DenseVector::set_zero(g);
+            for row in 0..m {
+                let j = &out.jacobian[row * n..(row + 1) * n];
+                let r = out.residuals[row];
+                for (i, ji) in j.iter().enumerate() {
+                    g.set_at(i, g.at(i) + ji * r);
+                }
+            }
+        }
+        if let Some(hess) = h {
+            DenseMatrix::set_zero(hess);
+            for row in 0..m {
+                DenseMatrix::add_outer_product_self(
+                    hess,
+                    1.0,
+                    &out.jacobian[row * n..(row + 1) * n],
+                );
+            }
+        }
+        cost
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     struct Sqrt2;
     impl ResidualsFn for Sqrt2 {
         type Scalar = f64;
