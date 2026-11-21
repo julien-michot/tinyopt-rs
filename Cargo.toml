@@ -1,0 +1,49 @@
+[package]
+name = "tinyopt-rs"
+version = "0.8.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A lightweight, Rust native optimization library (dense systems)"
+authors = ["Julien Michot"]
+license = "Apache-2.0"
+repository = "https://github.com/julienmichot/tinyopt-rs"
+readme = "README.md"
+keywords = ["optimization", "least-squares", "autodiff", "nonlinear"]
+categories = ["science", "mathematics"]
+
+[lib]
+name = "tinyopt_rs"
+path = "src/lib.rs"
+
+[features]
+default = ["nalgebra", "autodiff"]
+
+# --- Backends (exactly one must be enabled) ---------------------------------
+nalgebra = ["dep:nalgebra", "solver-ldlt"]
+faer = ["dep:faer", "solver-ldlt"]
+
+# --- Differentiation --------------------------------------------------------
+autodiff = ["dep:num-dual", "dep:nalgebra"]
+numdiff = []
+
+# --- Dense linear solver methods (LDLT is enabled by default, as in C++) ----
+solver-ldlt = []
+solver-llt = []
+solver-lu = []
+solver-qr = []
+solver-svd = []
+
+[dependencies]
+num-traits = "0.2"
+log = "0.4"
+
+nalgebra = { version = "0.35", optional = true }
+faer = { version = "0.24", optional = true }
+num-dual = { version = "0.15", optional = true }
+
+[dev-dependencies]
+approx = "0.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
