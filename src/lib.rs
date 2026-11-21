@@ -71,6 +71,7 @@ compile_error!(
 compile_error!("enable a backend: `nalgebra` (default) or `faer`");
 
 pub mod backend;
+pub mod block_sparse;
 pub mod block_tridiag;
 pub mod cost;
 pub mod covariance;
@@ -91,6 +92,7 @@ pub mod summary;
 mod optimize;
 
 pub use backend::{Dim, Dynamic, Static};
+pub use block_sparse::{BlockSparseLdlt, BlockSparseMat, BlockSparseMatX, BlockTypes, HasPair};
 pub use block_tridiag::{BlockMut, BlockTridiagLdlt, BlockTridiagMat, BlockTridiagMatX};
 pub use cost::Cost;
 pub use covariance::{CovarianceOptions, CovariancePattern, FinalCovariance};
@@ -98,8 +100,8 @@ pub use math::inverse;
 #[cfg(feature = "autodiff")]
 pub use optimize::optimize_robust_residuals;
 pub use optimize::{
-    DynGradient, DynHessian, optimize, optimize_default, optimize_sparse, optimize_tridiag,
-    optimize2, optimize2_default, optimize3, optimize3_default,
+    DynGradient, DynHessian, optimize, optimize_block_sparse, optimize_default, optimize_sparse,
+    optimize_tridiag, optimize2, optimize2_default, optimize3, optimize3_default,
 };
 #[cfg(feature = "autodiff")]
 pub use optimize::{optimize_cost, optimize_residuals, optimize_residuals_default};

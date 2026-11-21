@@ -4,6 +4,7 @@
 //! High-level optimization entry points, mirroring `tinyopt::Optimize`.
 
 use crate::backend::{Dynamic, Matrix, Vector};
+use crate::block_sparse::{BlockSparseMat, BlockTypes};
 use crate::block_tridiag::BlockTridiagMat;
 use crate::cost::Cost;
 use crate::hessian::HessianStorage;
@@ -75,6 +76,41 @@ where
     F: crate::diff::ResidualsFn<Scalar = f64> + ?Sized,
 {
     optimize_residuals(x, f, &Options::default())
+}
+
+/// Optimize `x` in place with a compile-time block-sparse Hessian.
+///
+/// Provide `Optimizer::init_with(prototype)` for an explicit block layout; the
+/// layout also grows automatically as accumulation blocks are created.
+pub fn optimize_block_sparse<T, P, F>(x: &mut P, f: F, options: &Options) -> Summary
+where
+    T: BlockTypes,
+    P: Params,
+    F: AccumulationFn<P::Scalar, P::Dim, BlockSparseMat<T, P::Scalar>>,
+{
+    match options.solver_type {
+        Solver::LevenbergMarquardt => {
+            lm::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::GaussNewton => {
+            gn::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::DogLeg => {
+            dl::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::GradientDescent => {
+            gd::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::ConjugateGradient => {
+            cg::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::Bfgs => {
+            bfgs::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::Lbfgs => {
+            lbfgs::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+    }
 }
 
 /// Optimize `x` in place with a block-tridiagonal Hessian of block size `B`.

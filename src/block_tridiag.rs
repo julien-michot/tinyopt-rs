@@ -22,6 +22,13 @@ pub struct BlockMut<'a, S> {
     cols: usize,
 }
 
+impl<'a, S> BlockMut<'a, S> {
+    /// Wrap raw column-major block data.
+    pub(crate) fn from_data(data: &'a mut [S], rows: usize, cols: usize) -> Self {
+        Self { data, rows, cols }
+    }
+}
+
 impl<'a, S: Real> BlockMut<'a, S> {
     /// Block shape.
     pub fn shape(&self) -> (usize, usize) {
