@@ -503,7 +503,8 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                 }
             }
         }
-        SparseMatrix::from_triplets(n, n, &triplets)
+        triplets.sort_unstable_by_key(|&(row, col, _)| (col, row));
+        SparseMatrix::from_sorted_triplets(n, n, &triplets)
     }
 
     /// Number of allocated blocks.
@@ -831,11 +832,7 @@ impl<T: BlockTypes, S: Real> HessianStorage<S> for BlockSparseMat<T, S> {
         num_reduced: usize,
         out: &mut [S],
     ) -> bool {
-        let mut ldlt = BlockSparseLdlt::<T, S>::new();
-        if ldlt.analyze(self, num_reduced) && ldlt.compute(self) {
-            return ldlt.solve_into(self, rhs, out);
-        }
-        // Fall back to the scalar sparse solver.
+        // Convert once per solve and use the scalar sparse Schur solver.
         let mut solver = SparseLinearSolvers::<S>::new(options.clone());
         let sparse = self.to_sparse();
         if !solver.analyze(&sparse, num_reduced) || !solver.compute(&sparse) {

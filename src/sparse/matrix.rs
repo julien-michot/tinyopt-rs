@@ -5,7 +5,6 @@
 //! tinyopt (full symmetric storage, triplets, `coeffRef` insertion).
 
 use core::fmt;
-use std::collections::BTreeMap;
 
 use crate::backend::{DenseMatrix, Dynamic, Matrix, zeros_matrix};
 use crate::real::Real;
@@ -56,26 +55,72 @@ impl<S: Real> SparseMatrix<S> {
 
     /// Build from `(row, col, value)` triplets; duplicate entries are summed.
     pub fn from_triplets(rows: usize, cols: usize, triplets: &[(usize, usize, S)]) -> Self {
-        // Key by (column, row) so iteration yields the CSC order.
-        let mut map: BTreeMap<(usize, usize), S> = BTreeMap::new();
+        // Sort by (column, row) once, then build the CSC arrays in a linear pass
+        // (duplicates are summed), avoiding a per-entry tree insertion.
+        let mut sorted: Vec<(usize, usize, S)> = Vec::with_capacity(triplets.len());
         for &(i, j, v) in triplets {
             assert!(i < rows && j < cols, "triplet index out of bounds");
-            *map.entry((j, i)).or_insert_with(S::zero) += v;
+            sorted.push((j, i, v));
         }
-        let mut matrix = Self::new(rows, cols);
-        matrix.col_ptrs = vec![0; cols + 1];
-        matrix.row_indices = Vec::with_capacity(map.len());
-        matrix.values = Vec::with_capacity(map.len());
-        for (&(j, i), &v) in &map {
-            matrix.col_ptrs[j + 1] += 1;
-            matrix.row_indices.push(i);
-            matrix.values.push(v);
+        sorted.sort_unstable_by_key(|&(j, i, _)| (j, i));
+
+        let mut counts = vec![0usize; cols];
+        let mut row_indices = Vec::with_capacity(sorted.len());
+        let mut values = Vec::with_capacity(sorted.len());
+        let mut k = 0;
+        while k < sorted.len() {
+            let (j, i, mut v) = sorted[k];
+            k += 1;
+            while k < sorted.len() && sorted[k].0 == j && sorted[k].1 == i {
+                v += sorted[k].2;
+                k += 1;
+            }
+            counts[j] += 1;
+            row_indices.push(i);
+            values.push(v);
         }
-        // BTreeMap iterates in (col,row) order, matching CSC.
+
+        let mut col_ptrs = vec![0usize; cols + 1];
         for j in 0..cols {
-            matrix.col_ptrs[j + 1] += matrix.col_ptrs[j];
+            col_ptrs[j + 1] = col_ptrs[j] + counts[j];
         }
-        matrix
+        Self {
+            nrows: rows,
+            ncols: cols,
+            col_ptrs,
+            row_indices,
+            values,
+        }
+    }
+
+    /// Build a CSC matrix from triplets already sorted by `(column, row)` and
+    /// free of duplicates (no map, single pass).
+    pub(crate) fn from_sorted_triplets(
+        rows: usize,
+        cols: usize,
+        triplets: &[(usize, usize, S)],
+    ) -> Self {
+        let mut col_ptrs = vec![0usize; cols + 1];
+        for &(_, j, _) in triplets {
+            col_ptrs[j + 1] += 1;
+        }
+        for j in 0..cols {
+            col_ptrs[j + 1] += col_ptrs[j];
+        }
+        let mut row_indices = Vec::with_capacity(triplets.len());
+        let mut values = Vec::with_capacity(triplets.len());
+        for &(i, j, v) in triplets {
+            debug_assert!(i < rows && j < cols, "triplet index out of bounds");
+            row_indices.push(i);
+            values.push(v);
+        }
+        Self {
+            nrows: rows,
+            ncols: cols,
+            col_ptrs,
+            row_indices,
+            values,
+        }
     }
 
     /// Number of rows.
@@ -248,20 +293,15 @@ impl<S: Real> SparseMatrix<S> {
     ///
     /// Accepts full-symmetric, upper-only, or lower-only input.
     pub fn to_lower(&self) -> Self {
-        let mut map: BTreeMap<(usize, usize), S> = BTreeMap::new();
+        let mut lower: Vec<(usize, usize, S)> = self.iter().filter(|&(i, j, _)| i >= j).collect();
+        let mut keys: Vec<(usize, usize)> = lower.iter().map(|&(i, j, _)| (i, j)).collect();
+        keys.sort_unstable();
         for (i, j, v) in self.iter() {
-            if i >= j {
-                *map.entry((i, j)).or_insert_with(S::zero) += v;
+            if i < j && keys.binary_search(&(j, i)).is_err() {
+                lower.push((j, i, v));
             }
         }
-        for (i, j, v) in self.iter() {
-            if i < j && !map.contains_key(&(j, i)) {
-                map.insert((j, i), v);
-            }
-        }
-        let triplets: Vec<(usize, usize, S)> =
-            map.into_iter().map(|((i, j), v)| (i, j, v)).collect();
-        Self::from_triplets(self.nrows, self.ncols, &triplets)
+        Self::from_triplets(self.nrows, self.ncols, &lower)
     }
 
     /// Matrix inverse (dense result pattern), mirroring C++ `Inverse` for
@@ -281,20 +321,15 @@ impl<S: Real> SparseMatrix<S> {
 
     /// Upper-triangular part, mirrored from the lower triangle when needed.
     pub fn to_upper(&self) -> Self {
-        let mut map: BTreeMap<(usize, usize), S> = BTreeMap::new();
+        let mut upper: Vec<(usize, usize, S)> = self.iter().filter(|&(i, j, _)| i <= j).collect();
+        let mut keys: Vec<(usize, usize)> = upper.iter().map(|&(i, j, _)| (i, j)).collect();
+        keys.sort_unstable();
         for (i, j, v) in self.iter() {
-            if i <= j {
-                *map.entry((i, j)).or_insert_with(S::zero) += v;
+            if i > j && keys.binary_search(&(j, i)).is_err() {
+                upper.push((j, i, v));
             }
         }
-        for (i, j, v) in self.iter() {
-            if i > j && !map.contains_key(&(j, i)) {
-                map.insert((j, i), v);
-            }
-        }
-        let triplets: Vec<(usize, usize, S)> =
-            map.into_iter().map(|((i, j), v)| (i, j, v)).collect();
-        Self::from_triplets(self.nrows, self.ncols, &triplets)
+        Self::from_triplets(self.nrows, self.ncols, &upper)
     }
 
     /// Transpose (swapping rows and columns).
