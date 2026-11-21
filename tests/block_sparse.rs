@@ -301,3 +301,87 @@ fn tridiagonal_block_layout_matches_block_tridiagonal_solver() {
         assert_relative_eq!(a, e, epsilon = 1e-9);
     }
 }
+
+block_sparse_types!(TwoThreeSorted, [2, 3]);
+
+#[test]
+fn sparse_conversion_keeps_sorted_columns_and_matches_dense() {
+    for (cams, points) in [(2usize, 20usize), (3, 7)] {
+        let mut h = BlockSparseMat::<TwoThreeSorted, f64>::with_counts(&[cams, points]);
+        // Dense pseudo-random blocks (deterministic, diagonally dominant).
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            ((seed % 1000) as f64) / 1000.0 - 0.5
+        };
+        for c in 0..cams {
+            let mut block = h.block_mut::<2, 2>(c, c);
+            for j in 0..2 {
+                for i in j..2 {
+                    let value = next() + if i == j { 5.0 } else { 0.0 };
+                    block.set_at(i, j, value);
+                    block.set_at(j, i, value);
+                }
+            }
+        }
+        for p in 0..points {
+            let mut block = h.block_mut::<3, 3>(p, p);
+            for j in 0..3 {
+                for i in j..3 {
+                    let value = next() + if i == j { 5.0 } else { 0.0 };
+                    block.set_at(i, j, value);
+                    block.set_at(j, i, value);
+                }
+            }
+        }
+        for c in 0..cams {
+            for p in 0..points {
+                if (c + p) % 2 == 0 {
+                    let mut block = h.block_mut::<2, 3>(c, p);
+                    for j in 0..3 {
+                        for i in 0..2 {
+                            block.set_at(i, j, next());
+                        }
+                    }
+                }
+            }
+        }
+
+        let sparse = h.to_sparse();
+        let dense = h.to_dense();
+        assert_eq!(sparse.nrows(), h.dims());
+        for j in 0..h.dims() {
+            let rows: Vec<usize> = sparse.column(j).map(|(i, _)| i).collect();
+            assert!(
+                rows.windows(2).all(|w| w[0] < w[1]),
+                "column {j} rows are not strictly increasing: {rows:?}"
+            );
+            for i in 0..h.dims() {
+                assert_relative_eq!(sparse.coeff(i, j), dense.elem(i, j), epsilon = 1e-12);
+            }
+        }
+        // Triangle extraction, and mirroring from an upper-only matrix.
+        let lower = sparse.to_lower();
+        let upper = sparse.to_upper();
+        for j in 0..h.dims() {
+            for i in 0..h.dims() {
+                let expected_lower = if i >= j { dense.elem(i, j) } else { 0.0 };
+                let expected_upper = if i <= j { dense.elem(i, j) } else { 0.0 };
+                assert_relative_eq!(lower.coeff(i, j), expected_lower, epsilon = 1e-12);
+                assert_relative_eq!(upper.coeff(i, j), expected_upper, epsilon = 1e-12);
+            }
+        }
+        let mirrored = upper.to_lower();
+        for j in 0..h.dims() {
+            for i in 0..h.dims() {
+                assert_relative_eq!(
+                    mirrored.coeff(i, j),
+                    if i >= j { dense.elem(i, j) } else { 0.0 },
+                    epsilon = 1e-12
+                );
+            }
+        }
+    }
+}

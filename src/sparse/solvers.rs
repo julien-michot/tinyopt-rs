@@ -142,7 +142,10 @@ impl<S: Real> SparseLinearSolvers<S> {
         // Back-substitution of the eliminated block.
         let mut ct_xr_rhs = zeros_vector::<S, Dynamic>(ne);
         for e in 0..ne {
-            let acc = (0..nr).fold(S::zero(), |a, r| a + ct.coeff(e, r) * xr.at(r));
+            let mut acc = S::zero();
+            for (r, v) in c.column(e) {
+                acc += v * xr.at(r);
+            }
             ct_xr_rhs.set_at(e, acc);
         }
         let correction = self.ldlt.solve(ct_xr_rhs.as_slice())?;

@@ -93,27 +93,14 @@ impl<S: Real> SparseMatrix<S> {
         }
     }
 
-    /// Build a CSC matrix from triplets already sorted by `(column, row)` and
-    /// free of duplicates (no map, single pass).
-    pub(crate) fn from_sorted_triplets(
+    /// Build a CSC matrix from prepared arrays (no validation, no sorting).
+    pub(crate) fn from_csc_parts(
         rows: usize,
         cols: usize,
-        triplets: &[(usize, usize, S)],
+        col_ptrs: Vec<usize>,
+        row_indices: Vec<usize>,
+        values: Vec<S>,
     ) -> Self {
-        let mut col_ptrs = vec![0usize; cols + 1];
-        for &(_, j, _) in triplets {
-            col_ptrs[j + 1] += 1;
-        }
-        for j in 0..cols {
-            col_ptrs[j + 1] += col_ptrs[j];
-        }
-        let mut row_indices = Vec::with_capacity(triplets.len());
-        let mut values = Vec::with_capacity(triplets.len());
-        for &(i, j, v) in triplets {
-            debug_assert!(i < rows && j < cols, "triplet index out of bounds");
-            row_indices.push(i);
-            values.push(v);
-        }
         Self {
             nrows: rows,
             ncols: cols,
@@ -293,15 +280,57 @@ impl<S: Real> SparseMatrix<S> {
     ///
     /// Accepts full-symmetric, upper-only, or lower-only input.
     pub fn to_lower(&self) -> Self {
-        let mut lower: Vec<(usize, usize, S)> = self.iter().filter(|&(i, j, _)| i >= j).collect();
-        let mut keys: Vec<(usize, usize)> = lower.iter().map(|&(i, j, _)| (i, j)).collect();
+        let lower = self.lower_csc();
+        // Fast path: every strict-upper entry already has a lower counterpart.
+        let mut complete = true;
+        for j in 0..self.ncols {
+            for p in self.col_ptrs[j]..self.col_ptrs[j + 1] {
+                let i = self.row_indices[p];
+                if i < j && !lower.has_entry(j, i) {
+                    complete = false;
+                    break;
+                }
+            }
+            if !complete {
+                break;
+            }
+        }
+        if complete {
+            return lower;
+        }
+        // Upper-only or asymmetric input: mirror the missing entries.
+        let mut triplets: Vec<(usize, usize, S)> =
+            self.iter().filter(|&(i, j, _)| i >= j).collect();
+        let mut keys: Vec<(usize, usize)> = triplets.iter().map(|&(i, j, _)| (i, j)).collect();
         keys.sort_unstable();
         for (i, j, v) in self.iter() {
             if i < j && keys.binary_search(&(j, i)).is_err() {
-                lower.push((j, i, v));
+                triplets.push((j, i, v));
             }
         }
-        Self::from_triplets(self.nrows, self.ncols, &lower)
+        Self::from_triplets(self.nrows, self.ncols, &triplets)
+    }
+
+    /// Lower triangle as CSC (direct copy, rows stay sorted).
+    fn lower_csc(&self) -> Self {
+        let mut col_ptrs = Vec::with_capacity(self.ncols + 1);
+        let mut row_indices = Vec::new();
+        let mut values = Vec::new();
+        col_ptrs.push(0);
+        for j in 0..self.ncols {
+            let (lo, hi) = (self.col_ptrs[j], self.col_ptrs[j + 1]);
+            let start = lo + self.row_indices[lo..hi].partition_point(|&r| r < j);
+            row_indices.extend_from_slice(&self.row_indices[start..hi]);
+            values.extend_from_slice(&self.values[start..hi]);
+            col_ptrs.push(row_indices.len());
+        }
+        Self::from_csc_parts(self.nrows, self.ncols, col_ptrs, row_indices, values)
+    }
+
+    /// Whether `(i, j)` is explicitly stored.
+    fn has_entry(&self, i: usize, j: usize) -> bool {
+        let (lo, hi) = (self.col_ptrs[j], self.col_ptrs[j + 1]);
+        self.row_indices[lo..hi].binary_search(&i).is_ok()
     }
 
     /// Matrix inverse (dense result pattern), mirroring C++ `Inverse` for
@@ -321,21 +350,76 @@ impl<S: Real> SparseMatrix<S> {
 
     /// Upper-triangular part, mirrored from the lower triangle when needed.
     pub fn to_upper(&self) -> Self {
-        let mut upper: Vec<(usize, usize, S)> = self.iter().filter(|&(i, j, _)| i <= j).collect();
-        let mut keys: Vec<(usize, usize)> = upper.iter().map(|&(i, j, _)| (i, j)).collect();
+        let upper = self.upper_csc();
+        let mut complete = true;
+        for j in 0..self.ncols {
+            for p in self.col_ptrs[j]..self.col_ptrs[j + 1] {
+                let i = self.row_indices[p];
+                if i > j && !upper.has_entry(j, i) {
+                    complete = false;
+                    break;
+                }
+            }
+            if !complete {
+                break;
+            }
+        }
+        if complete {
+            return upper;
+        }
+        let mut triplets: Vec<(usize, usize, S)> =
+            self.iter().filter(|&(i, j, _)| i <= j).collect();
+        let mut keys: Vec<(usize, usize)> = triplets.iter().map(|&(i, j, _)| (i, j)).collect();
         keys.sort_unstable();
         for (i, j, v) in self.iter() {
             if i > j && keys.binary_search(&(j, i)).is_err() {
-                upper.push((j, i, v));
+                triplets.push((j, i, v));
             }
         }
-        Self::from_triplets(self.nrows, self.ncols, &upper)
+        Self::from_triplets(self.nrows, self.ncols, &triplets)
+    }
+
+    /// Upper triangle as CSC (direct copy, rows stay sorted).
+    fn upper_csc(&self) -> Self {
+        let mut col_ptrs = Vec::with_capacity(self.ncols + 1);
+        let mut row_indices = Vec::new();
+        let mut values = Vec::new();
+        col_ptrs.push(0);
+        for j in 0..self.ncols {
+            let (lo, hi) = (self.col_ptrs[j], self.col_ptrs[j + 1]);
+            let end = lo + self.row_indices[lo..hi].partition_point(|&r| r <= j);
+            row_indices.extend_from_slice(&self.row_indices[lo..end]);
+            values.extend_from_slice(&self.values[lo..end]);
+            col_ptrs.push(row_indices.len());
+        }
+        Self::from_csc_parts(self.nrows, self.ncols, col_ptrs, row_indices, values)
     }
 
     /// Transpose (swapping rows and columns).
     pub fn transpose(&self) -> Self {
-        let triplets: Vec<(usize, usize, S)> = self.iter().map(|(i, j, v)| (j, i, v)).collect();
-        Self::from_triplets(self.ncols, self.nrows, &triplets)
+        // Counting sort by the new column (= old row); within a column the
+        // entries stay ordered by the old column, so rows remain sorted.
+        let mut counts = vec![0usize; self.nrows];
+        for &i in &self.row_indices {
+            counts[i] += 1;
+        }
+        let mut col_ptrs = vec![0usize; self.nrows + 1];
+        for j in 0..self.nrows {
+            col_ptrs[j + 1] = col_ptrs[j] + counts[j];
+        }
+        let mut pos = col_ptrs.clone();
+        let mut row_indices = vec![0usize; self.row_indices.len()];
+        let mut values = vec![S::zero(); self.values.len()];
+        for j in 0..self.ncols {
+            for p in self.col_ptrs[j]..self.col_ptrs[j + 1] {
+                let r = self.row_indices[p];
+                let q = pos[r];
+                pos[r] += 1;
+                row_indices[q] = j;
+                values[q] = self.values[p];
+            }
+        }
+        Self::from_csc_parts(self.ncols, self.nrows, col_ptrs, row_indices, values)
     }
 
     /// Sub-matrix `rows × cols` (ranges), preserving the CSC layout.
@@ -346,15 +430,27 @@ impl<S: Real> SparseMatrix<S> {
         col_start: usize,
         col_end: usize,
     ) -> Self {
-        let mut triplets = Vec::new();
+        // Rows are sorted inside each column: copy the matching range directly.
+        let mut col_ptrs = Vec::with_capacity(col_end - col_start + 1);
+        let mut row_indices = Vec::new();
+        let mut values = Vec::new();
+        col_ptrs.push(0);
         for j in col_start..col_end {
-            for (i, v) in self.column(j) {
-                if i >= row_start && i < row_end {
-                    triplets.push((i - row_start, j - col_start, v));
-                }
-            }
+            let (lo, hi) = (self.col_ptrs[j], self.col_ptrs[j + 1]);
+            let rows = &self.row_indices[lo..hi];
+            let start = lo + rows.partition_point(|&r| r < row_start);
+            let end = lo + rows.partition_point(|&r| r < row_end);
+            row_indices.extend(rows[start - lo..end - lo].iter().map(|r| r - row_start));
+            values.extend_from_slice(&self.values[start..end]);
+            col_ptrs.push(row_indices.len());
         }
-        Self::from_triplets(row_end - row_start, col_end - col_start, &triplets)
+        Self::from_csc_parts(
+            row_end - row_start,
+            col_end - col_start,
+            col_ptrs,
+            row_indices,
+            values,
+        )
     }
 
     /// Matrix-vector product with a dense vector.

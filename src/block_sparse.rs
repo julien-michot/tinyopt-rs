@@ -472,15 +472,50 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
     }
 
     /// Sparse conversion (full symmetric pattern).
+    ///
+    /// Two passes (count, then fill) build the CSC arrays directly: the block
+    /// iteration order already yields sorted rows inside each column.
     pub fn to_sparse(&self) -> SparseMatrix<S> {
         let n = self.dims();
-        let mut triplets = Vec::new();
         let mut offsets = Vec::with_capacity(Self::num_types());
         let mut off = 0;
         for t in 0..Self::num_types() {
             offsets.push(off);
             off += self.counts[t] * self.sizes[t];
         }
+
+        let mut counts = vec![0usize; n];
+        for a in 0..Self::num_types() {
+            for b in a..Self::num_types() {
+                let pair = Self::pair_index(a, b);
+                let (ra, ca) = (self.sizes[a], self.sizes[b]);
+                let (oa, ob) = (offsets[a], offsets[b]);
+                for (&(r, c), block) in &self.blocks[pair] {
+                    let row_base = oa + r * ra;
+                    let col_base = ob + c * ca;
+                    for j in 0..ca {
+                        for i in 0..ra {
+                            if block[j * ra + i] != S::zero() {
+                                counts[col_base + j] += 1;
+                                if a != b {
+                                    counts[row_base + i] += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut col_ptrs = vec![0usize; n + 1];
+        for j in 0..n {
+            col_ptrs[j + 1] = col_ptrs[j] + counts[j];
+        }
+        let total = col_ptrs[n];
+        let mut pos = col_ptrs.clone();
+        let mut row_indices = vec![0usize; total];
+        let mut values = vec![S::zero(); total];
+
         for a in 0..Self::num_types() {
             for b in a..Self::num_types() {
                 let pair = Self::pair_index(a, b);
@@ -492,19 +527,27 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                     for j in 0..ca {
                         for i in 0..ra {
                             let v = block[j * ra + i];
-                            if v != S::zero() {
-                                triplets.push((row_base + i, col_base + j, v));
-                                if a != b {
-                                    triplets.push((col_base + j, row_base + i, v));
-                                }
+                            if v == S::zero() {
+                                continue;
+                            }
+                            let col = col_base + j;
+                            let p = pos[col];
+                            pos[col] += 1;
+                            row_indices[p] = row_base + i;
+                            values[p] = v;
+                            if a != b {
+                                let col = row_base + i;
+                                let p = pos[col];
+                                pos[col] += 1;
+                                row_indices[p] = col_base + j;
+                                values[p] = v;
                             }
                         }
                     }
                 }
             }
         }
-        triplets.sort_unstable_by_key(|&(row, col, _)| (col, row));
-        SparseMatrix::from_sorted_triplets(n, n, &triplets)
+        SparseMatrix::from_csc_parts(n, n, col_ptrs, row_indices, values)
     }
 
     /// Number of allocated blocks.
