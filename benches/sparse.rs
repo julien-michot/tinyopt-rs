@@ -14,7 +14,7 @@ use tinyopt_rs::block_sparse_types;
 use tinyopt_rs::block_tridiag::BlockTridiagMat;
 use tinyopt_rs::optimizers::lm;
 use tinyopt_rs::sparse::SparseMat;
-use tinyopt_rs::{Cost, Options, Params, optimize_tridiag};
+use tinyopt_rs::{Cost, Options, Ordering, Params, optimize_tridiag};
 
 type Vx = Vector<f64, Dynamic>;
 
@@ -78,6 +78,25 @@ fn sparse_chains(c: &mut Criterion) {
                 std::hint::black_box(summary.final_cost.cost)
             })
         });
+    }
+}
+
+/// Ordering overhead on a banded pattern (a chain needs no reordering).
+fn sparse_chain_orderings(c: &mut Criterion) {
+    for dims in [10usize, 100, 1000] {
+        let acc = sparse_chain_acc(dims);
+        for (name, ordering) in [("natural", Ordering::Natural), ("amd", Ordering::Amd)] {
+            let mut opts = options();
+            opts.linear.ordering = ordering;
+            let mut opt = lm::Optimizer::<Vec<f64>, SparseMat>::new(opts);
+            c.bench_function(&format!("sparse_chain_ord/{dims}D/{name}"), |b| {
+                b.iter(|| {
+                    let mut x = vec![0.0; dims];
+                    let summary = opt.optimize(&mut x, &acc);
+                    std::hint::black_box(summary.final_cost.cost)
+                })
+            });
+        }
     }
 }
 
@@ -236,5 +255,61 @@ fn block_sparse_ba(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, sparse_chains, tridiag_chain, block_sparse_ba);
+/// Symbolic + numeric LDLᵀ on a star graph whose natural ordering is dense.
+fn sparse_ordering(c: &mut Criterion) {
+    use tinyopt_rs::Ordering;
+    use tinyopt_rs::sparse::{SimplicialLdl, SparseMatrix};
+
+    for n in [200usize, 800] {
+        let mut triplets = Vec::new();
+        for i in 0..n {
+            triplets.push((i, i, n as f64));
+            if i > 0 {
+                triplets.push((i, 0, 1.0));
+                triplets.push((0, i, 1.0));
+            }
+        }
+        let lower = SparseMatrix::<f64>::from_triplets(n, n, &triplets).to_lower();
+        for (name, ordering) in [("natural", Ordering::Natural), ("amd", Ordering::Amd)] {
+            c.bench_function(&format!("ordering/{n}D/{name}"), |b| {
+                b.iter(|| {
+                    let mut ldlt = SimplicialLdl::<f64>::default();
+                    assert!(ldlt.analyze_and_factorize_with(&lower, ordering));
+                    std::hint::black_box(ldlt.fill_in())
+                })
+            });
+        }
+    }
+
+    // A banded (tridiagonal) pattern: AMD has no fill to remove, so it should
+    // stay close to the natural ordering instead of dominating the solve.
+    let n = 1000usize;
+    let mut triplets = Vec::new();
+    for i in 0..n {
+        triplets.push((i, i, 4.0));
+        if i + 1 < n {
+            triplets.push((i + 1, i, -1.0));
+            triplets.push((i, i + 1, -1.0));
+        }
+    }
+    let lower = SparseMatrix::<f64>::from_triplets(n, n, &triplets).to_lower();
+    for (name, ordering) in [("natural", Ordering::Natural), ("amd", Ordering::Amd)] {
+        c.bench_function(&format!("ordering_chain/{n}D/{name}"), |b| {
+            b.iter(|| {
+                let mut ldlt = SimplicialLdl::<f64>::default();
+                assert!(ldlt.analyze_and_factorize_with(&lower, ordering));
+                std::hint::black_box(ldlt.fill_in())
+            })
+        });
+    }
+}
+
+criterion_group!(
+    benches,
+    sparse_chains,
+    sparse_chain_orderings,
+    tridiag_chain,
+    block_sparse_ba,
+    sparse_ordering
+);
 criterion_main!(benches);

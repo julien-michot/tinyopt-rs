@@ -49,7 +49,9 @@ impl<S: Real> SparseLinearSolvers<S> {
         }
         self.num_reduced = num_reduced;
         let eliminated = self.eliminated_block(h, num_reduced);
-        self.analyzed = self.ldlt.analyze_pattern(&eliminated.to_lower());
+        self.analyzed = self
+            .ldlt
+            .analyze_pattern_with(&eliminated.to_lower(), self.options.ordering);
         self.computed = false;
         self.analyzed
     }

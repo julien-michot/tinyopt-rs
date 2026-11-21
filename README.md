@@ -129,8 +129,10 @@ let summary = optimize_sparse(&mut x, |x, grad, h| {
 ```
 
 - `SparseMatrix<S>` (CSC) with triplet assembly, `coeff_ref`, symmetric
-  completion and a simplicial LDLᵀ (`SimplicialLdl`), including the scalar Schur
-  complement path.
+  completion and a simplicial LDLᵀ (`SimplicialLdl`) with a native
+  minimum-degree (AMD-style) fill-reducing ordering
+  (`options.linear.ordering`, default `Ordering::Amd`; `Ordering::Natural`
+  disables it), including the scalar Schur complement path.
 - `BlockTridiagMat<B>` (fixed block size) and `BlockTridiagMatX<S>` (dynamic) with
   block Thomas/Takahashi factorization (`BlockTridiagLdlt`).
 - `block_sparse_types!` + `BlockSparseMat<T, S>` with compile-time block-pair

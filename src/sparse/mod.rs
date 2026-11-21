@@ -3,10 +3,12 @@
 
 //! Sparse matrices and solvers (dense-block/sparse parity with the C++ library).
 
+mod amd;
 mod ldlt;
 mod matrix;
 mod solvers;
 
+pub use amd::minimum_degree;
 pub use ldlt::SimplicialLdl;
 pub use matrix::SparseMatrix;
 pub use solvers::SparseLinearSolvers;

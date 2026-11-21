@@ -201,8 +201,11 @@ impl RobustResidualsFn for Problem {
 
 Implementation notes:
 
-- The scalar sparse solver uses natural ordering (no AMD); exactness is
-  unaffected.
+- The scalar sparse solver applies a native minimum-degree fill-reducing
+  ordering by default (`LinearSolverOptions::ordering = Ordering::Amd`),
+  matching Eigen's AMD default; `Ordering::Natural` disables it. Exactness is
+  unaffected. Paths and cycles (maximum degree ≤ 2) skip the ordering step
+  since no elimination order can reduce their (zero) fill.
 - `BlockSparseLdlt` uses an exact dense-partition Schur complement (reduced
   head block + inverted eliminated block). The C++ independent/coupled block
   elimination and AMD ordering are not implemented; results match, performance

@@ -27,6 +27,16 @@ pub enum Solver {
     Lbfgs,
 }
 
+/// Fill-reducing ordering for sparse factorizations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Ordering {
+    /// Minimum-degree ordering (AMD family, default).
+    #[default]
+    Amd,
+    /// Natural (identity) ordering.
+    Natural,
+}
+
 /// Line search method.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum LineSearchMethod {
@@ -52,6 +62,8 @@ pub struct LinearSolverOptions {
     pub allow_schur: bool,
     /// Reuse the symbolic factorization between iterations.
     pub reuse_symbolic: bool,
+    /// Fill-reducing ordering used by sparse factorizations.
+    pub ordering: Ordering,
     /// Initial shift applied when a factorization needs regularization.
     pub initial_shift: f64,
 }
@@ -63,6 +75,7 @@ impl Default for LinearSolverOptions {
             svd_relative_threshold: 0.0,
             allow_schur: true,
             reuse_symbolic: true,
+            ordering: Ordering::Amd,
             initial_shift: 1e-3,
         }
     }
