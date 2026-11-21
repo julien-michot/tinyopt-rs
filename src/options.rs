@@ -48,6 +48,10 @@ pub struct LinearSolverOptions {
     pub method: LinearSolverMethod,
     /// Relative threshold for the SVD pseudo-inverse step.
     pub svd_relative_threshold: f64,
+    /// Whether the Schur-complement partitioning may be used.
+    pub allow_schur: bool,
+    /// Reuse the symbolic factorization between iterations.
+    pub reuse_symbolic: bool,
     /// Initial shift applied when a factorization needs regularization.
     pub initial_shift: f64,
 }
@@ -57,6 +61,8 @@ impl Default for LinearSolverOptions {
         Self {
             method: LinearSolverMethod::Ldlt,
             svd_relative_threshold: 0.0,
+            allow_schur: true,
+            reuse_symbolic: true,
             initial_shift: 1e-3,
         }
     }

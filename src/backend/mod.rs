@@ -206,6 +206,10 @@ pub enum LinearSolverMethod {
     Qr,
     /// Singular value decomposition (pseudo-inverse step).
     Svd,
+    /// CHOLMOD sparse solver (mapped to the built-in sparse LDLT here).
+    SuiteSparse,
+    /// Incomplete Cholesky preconditioner (mapped to the built-in sparse LDLT).
+    IncompleteCholesky,
 }
 
 /// Backend vector type for scalar `S` and dimension `D`.
@@ -237,6 +241,10 @@ pub fn solve<S: Real, D: Dim>(
         LinearSolverMethod::Lu => D::solve_lu(a, b),
         LinearSolverMethod::Qr => D::solve_qr(a, b),
         LinearSolverMethod::Svd => D::solve_svd(a, b),
+        // No dedicated sparse backend here: fall back to the dense LDLT.
+        LinearSolverMethod::SuiteSparse | LinearSolverMethod::IncompleteCholesky => {
+            D::solve_ldlt(a, b)
+        }
     }
 }
 

@@ -82,6 +82,7 @@ pub mod options;
 pub mod params;
 pub mod params_pack;
 pub mod real;
+pub mod sparse;
 pub mod stop_reasons;
 pub mod summary;
 
@@ -104,6 +105,7 @@ pub use options::{LineSearchMethod, Options, Solver};
 pub use params::{Params, ParamsWrapper};
 pub use params_pack::{PackValues, ParamsPack};
 pub use real::Real;
+pub use sparse::{SimplicialLdl, SparseLinearSolvers, SparseMat, SparseMatf, SparseMatrix};
 pub use stop_reasons::StopReason;
 pub use summary::{History, Summary};
 
