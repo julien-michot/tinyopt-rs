@@ -9,6 +9,7 @@
 
 use crate::backend::{DenseMatrix, DenseVector, Dim, Matrix, Vector, zeros_matrix};
 use crate::cost::Cost;
+use crate::hessian::HessianStorage;
 use crate::optimizers::AccumulationFn;
 use crate::real::Real;
 
@@ -114,6 +115,7 @@ impl<S, F, D> AccumulationFn<S, D> for NumDiffAccumulator<'_, F, S>
 where
     S: Real,
     D: Dim,
+    Matrix<S, D>: HessianStorage<S>,
     F: Fn(&[S]) -> Vec<S> + ?Sized,
 {
     fn eval(&self, x: &[S], grad: Option<&mut Vector<S, D>>, h: Option<&mut Matrix<S, D>>) -> Cost {
@@ -173,6 +175,7 @@ impl<S, F, D> AccumulationFn<S, D> for NumDiffCostAccumulator<'_, F, S>
 where
     S: Real,
     D: Dim,
+    Matrix<S, D>: HessianStorage<S>,
     F: Fn(&[S]) -> S + ?Sized,
 {
     fn eval(&self, x: &[S], grad: Option<&mut Vector<S, D>>, h: Option<&mut Matrix<S, D>>) -> Cost {

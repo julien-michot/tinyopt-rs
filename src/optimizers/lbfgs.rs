@@ -6,6 +6,7 @@
 use num_traits::{FromPrimitive, One, ToPrimitive, Zero};
 
 use crate::backend::{DenseVector, Matrix, Vector, zeros_vector};
+use crate::hessian::HessianStorage;
 use crate::math::all_finite;
 use crate::optimizers::fixed::FixedSet;
 use crate::optimizers::impl_fixed_api;
@@ -18,10 +19,14 @@ const HISTORY_CAPACITY: usize = 8;
 
 /// L-BFGS optimizer, mirroring `tinyopt::lbfgs::Optimizer`.
 #[derive(Clone, Debug)]
-pub struct Optimizer<P: Params> {
+pub struct Optimizer<
+    P: Params,
+    H: HessianStorage<<P as Params>::Scalar> = Matrix<<P as Params>::Scalar, <P as Params>::Dim>,
+> {
     options: Options,
     state: Option<State<P>>,
     fixed: FixedSet,
+    _marker: core::marker::PhantomData<H>,
 }
 
 #[derive(Clone, Debug)]
@@ -43,7 +48,7 @@ struct State<P: Params> {
     update_available: bool,
 }
 
-impl<P: Params> Optimizer<P> {
+impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
     impl_fixed_api!();
 
     /// Create an optimizer with the given options.
@@ -52,6 +57,7 @@ impl<P: Params> Optimizer<P> {
             options,
             state: None,
             fixed: FixedSet::default(),
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -68,7 +74,7 @@ impl<P: Params> Optimizer<P> {
     /// Optimize `x` in place.
     pub fn optimize<F>(&mut self, x: &mut P, f: F) -> Summary
     where
-        F: AccumulationFn<P::Scalar, P::Dim>,
+        F: AccumulationFn<P::Scalar, P::Dim, H>,
     {
         let options = self.options.clone();
         run(x, f, &options, self)
@@ -79,12 +85,13 @@ fn make_history<P: Params>(dims: usize) -> [Vector<P::Scalar, P::Dim>; HISTORY_C
     core::array::from_fn(|_| zeros_vector::<P::Scalar, P::Dim>(dims))
 }
 
-impl<P: Params> Algorithm<P> for Optimizer<P> {
-    fn fixed(&self) -> &FixedSet {
-        &self.fixed
-    }
+impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H> {
     fn needs_hessian(&self) -> bool {
         false
+    }
+
+    fn fixed(&self) -> &FixedSet {
+        &self.fixed
     }
 
     fn reset(&mut self, dims: usize) {
@@ -126,17 +133,12 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
         state.has_step = false;
     }
 
-    fn precondition(
-        &mut self,
-        _grad: &mut Vector<P::Scalar, P::Dim>,
-        _h: &mut Matrix<P::Scalar, P::Dim>,
-    ) {
-    }
+    fn precondition(&mut self, _grad: &mut Vector<P::Scalar, P::Dim>, _h: &mut H) {}
 
     fn solve(
         &mut self,
         grad: &Vector<P::Scalar, P::Dim>,
-        _h: &Matrix<P::Scalar, P::Dim>,
+        _h: &H,
     ) -> Option<Step<P::Scalar, P::Dim>> {
         let state = self.state.as_mut().expect("reset() must be called first");
         let capacity = HISTORY_CAPACITY;

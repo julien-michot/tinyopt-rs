@@ -3,7 +3,6 @@
 
 //! Optimization summary and per-iteration history, mirroring tinyopt's `Summary`.
 
-use crate::backend::{Dynamic, Matrix};
 use crate::cost::Cost;
 use crate::stop_reasons::StopReason;
 
@@ -71,7 +70,7 @@ pub struct Summary {
     /// Cumulated optimization duration in milliseconds.
     pub duration_ms: f32,
     /// Final covariance matrix (single precision), when exported.
-    pub final_cov: Option<Matrix<f32, Dynamic>>,
+    pub final_cov: Option<crate::covariance::FinalCovariance>,
     /// Whether numerical derivatives were used.
     pub num_diff_used: bool,
     /// Per-iteration results.

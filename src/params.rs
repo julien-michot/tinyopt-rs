@@ -43,6 +43,11 @@ pub trait Params {
     fn fixed(&self) -> Option<Vec<usize>> {
         None
     }
+
+    /// Reduced (Schur) block as `(start, count)`, at the head of the vector.
+    fn reduced(&self) -> Option<(usize, usize)> {
+        None
+    }
 }
 
 /// Thin by-reference adapter around a parameter type, mirroring C++

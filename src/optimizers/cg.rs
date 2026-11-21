@@ -6,6 +6,7 @@
 use num_traits::{FromPrimitive, ToPrimitive, Zero};
 
 use crate::backend::{DenseVector, Matrix, Vector, zeros_vector};
+use crate::hessian::HessianStorage;
 use crate::optimizers::fixed::FixedSet;
 use crate::optimizers::impl_fixed_api;
 use crate::optimizers::optimizer::{AccumulationFn, Algorithm, Step, run};
@@ -15,10 +16,14 @@ use crate::summary::Summary;
 
 /// Conjugate gradient optimizer, mirroring `tinyopt::cg::Optimizer`.
 #[derive(Clone, Debug)]
-pub struct Optimizer<P: Params> {
+pub struct Optimizer<
+    P: Params,
+    H: HessianStorage<<P as Params>::Scalar> = Matrix<<P as Params>::Scalar, <P as Params>::Dim>,
+> {
     options: Options,
     state: Option<State<P>>,
     fixed: FixedSet,
+    _marker: core::marker::PhantomData<H>,
 }
 
 #[derive(Clone, Debug)]
@@ -30,7 +35,7 @@ struct State<P: Params> {
     has_previous: bool,
 }
 
-impl<P: Params> Optimizer<P> {
+impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
     impl_fixed_api!();
 
     /// Create an optimizer with the given options.
@@ -39,6 +44,7 @@ impl<P: Params> Optimizer<P> {
             options,
             state: None,
             fixed: FixedSet::default(),
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -55,19 +61,20 @@ impl<P: Params> Optimizer<P> {
     /// Optimize `x` in place.
     pub fn optimize<F>(&mut self, x: &mut P, f: F) -> Summary
     where
-        F: AccumulationFn<P::Scalar, P::Dim>,
+        F: AccumulationFn<P::Scalar, P::Dim, H>,
     {
         let options = self.options.clone();
         run(x, f, &options, self)
     }
 }
 
-impl<P: Params> Algorithm<P> for Optimizer<P> {
-    fn fixed(&self) -> &FixedSet {
-        &self.fixed
-    }
+impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H> {
     fn needs_hessian(&self) -> bool {
         false
+    }
+
+    fn fixed(&self) -> &FixedSet {
+        &self.fixed
     }
 
     fn reset(&mut self, dims: usize) {
@@ -100,14 +107,12 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
             }
         }
 
-        // direction = -grad + beta * previous_direction
         let beta = P::Scalar::from_f64(beta).expect("beta fits");
         for i in 0..n {
             let d = -grad.at(i) + beta * state.previous_direction.at(i);
             state.direction.set_at(i, d);
         }
 
-        // Restart when the direction is not a descent direction.
         if DenseVector::dot(grad, &state.direction) >= P::Scalar::zero() {
             for i in 0..n {
                 state.direction.set_at(i, -grad.at(i));
@@ -119,17 +124,12 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
         state.has_previous = true;
     }
 
-    fn precondition(
-        &mut self,
-        _grad: &mut Vector<P::Scalar, P::Dim>,
-        _h: &mut Matrix<P::Scalar, P::Dim>,
-    ) {
-    }
+    fn precondition(&mut self, _grad: &mut Vector<P::Scalar, P::Dim>, _h: &mut H) {}
 
     fn solve(
         &mut self,
         _grad: &Vector<P::Scalar, P::Dim>,
-        _h: &Matrix<P::Scalar, P::Dim>,
+        _h: &H,
     ) -> Option<Step<P::Scalar, P::Dim>> {
         let state = self.state.as_ref().expect("reset() must be called first");
         let scale = P::Scalar::from_f64(state.step_size).expect("step size fits");

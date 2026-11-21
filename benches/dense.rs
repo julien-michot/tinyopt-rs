@@ -189,6 +189,7 @@ where
     S: Real + 'static,
     D: Dim,
     Vector<S, D>: tinyopt_rs::Params<Scalar = S, Dim = D>,
+    Matrix<S, D>: tinyopt_rs::hessian::HessianStorage<S>,
     F: Fn(&[S], Option<&mut Vector<S, D>>, Option<&mut Matrix<S, D>>) -> Cost + Copy,
 {
     let mut optimizer = lm::Optimizer::<Vector<S, D>>::new(options());

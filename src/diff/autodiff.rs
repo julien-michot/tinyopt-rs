@@ -31,6 +31,7 @@ use num_dual::{Derivative, DualNum, DualVec};
 
 use crate::backend::{DenseMatrix, DenseVector, Dim, Dynamic, Matrix, Static, Vector};
 use crate::cost::Cost;
+use crate::hessian::HessianStorage;
 use crate::optimizers::AccumulationFn;
 use crate::real::Real;
 
@@ -228,6 +229,7 @@ impl<F, D> AccumulationFn<f64, D> for AdAccumulator<'_, F>
 where
     F: ResidualsFn<Scalar = f64> + ?Sized,
     D: AdDim,
+    Matrix<f64, D>: HessianStorage<f64>,
 {
     fn eval(
         &self,
@@ -353,6 +355,7 @@ impl<F, D> AccumulationFn<f64, D> for RobustAdAccumulator<'_, F>
 where
     F: RobustResidualsFn<Scalar = f64> + ?Sized,
     D: AdDim,
+    Matrix<f64, D>: HessianStorage<f64>,
 {
     fn eval(
         &self,
@@ -458,6 +461,7 @@ impl<F, D> AccumulationFn<f64, D> for CostAccumulator<'_, F>
 where
     F: CostFn<Scalar = f64> + ?Sized,
     D: AdDim,
+    Matrix<f64, D>: HessianStorage<f64>,
 {
     fn eval(
         &self,

@@ -3,9 +3,66 @@
 
 //! Dense covariance export, mirroring tinyopt's `CovarianceOptions`.
 
-use crate::backend::{DenseMatrix, Dim, Matrix, inverse};
+use crate::backend::{DenseMatrix, Dim, Dynamic, Matrix, inverse};
 use crate::cost::Cost;
 use crate::real::Real;
+use crate::sparse::SparseMatrix;
+
+/// Structure of the exported covariance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CovariancePattern {
+    /// Natural structure for the Hessian storage (dense or sparse).
+    #[default]
+    Auto,
+    /// Keep only block-diagonal (or diagonal) entries.
+    BlockDiagonal,
+    /// Keep the sparsity pattern of the Hessian.
+    PreserveSparsity,
+    /// Dense reduced block + block-diagonal eliminated blocks (Schur).
+    SchurPartitioned,
+    /// Always export a dense covariance.
+    FullDense,
+}
+
+/// Exported covariance, whose variant follows the Hessian storage.
+#[derive(Clone, Debug)]
+pub enum FinalCovariance {
+    /// Dense covariance.
+    Dense(Matrix<f32, Dynamic>),
+    /// Sparse covariance.
+    Sparse(SparseMatrix<f32>),
+}
+
+impl FinalCovariance {
+    /// Dense view, when available.
+    pub fn as_dense(&self) -> Option<&Matrix<f32, Dynamic>> {
+        match self {
+            FinalCovariance::Dense(m) => Some(m),
+            FinalCovariance::Sparse(_) => None,
+        }
+    }
+
+    /// Sparse view, when available.
+    pub fn as_sparse(&self) -> Option<&SparseMatrix<f32>> {
+        match self {
+            FinalCovariance::Dense(_) => None,
+            FinalCovariance::Sparse(m) => Some(m),
+        }
+    }
+
+    /// Element accessor `(i, j)`.
+    pub fn elem(&self, i: usize, j: usize) -> f32 {
+        self.at(i, j)
+    }
+
+    /// Element accessor `(i, j)`.
+    pub fn at(&self, i: usize, j: usize) -> f32 {
+        match self {
+            FinalCovariance::Dense(m) => m.elem(i, j),
+            FinalCovariance::Sparse(m) => m.coeff(i, j),
+        }
+    }
+}
 
 /// Options controlling the final covariance computation.
 #[derive(Clone, Copy, Debug)]
@@ -16,6 +73,8 @@ pub struct CovarianceOptions {
     pub scale_by_residual_variance: bool,
     /// Extra diagonal damping added before inversion.
     pub damping: f64,
+    /// Structure of the exported covariance.
+    pub pattern: CovariancePattern,
 }
 
 impl Default for CovarianceOptions {
@@ -24,6 +83,7 @@ impl Default for CovarianceOptions {
             zero_fixed_variances: true,
             scale_by_residual_variance: false,
             damping: 0.0,
+            pattern: CovariancePattern::Auto,
         }
     }
 }
@@ -68,6 +128,83 @@ pub fn compute_covariance<S: Real, D: Dim>(
     }
 
     Some(cov)
+}
+
+/// Compute a sparse covariance from an un-damped sparse Hessian.
+pub fn compute_sparse_covariance<S: Real>(
+    hessian: &SparseMatrix<S>,
+    options: &CovarianceOptions,
+    cost: Cost,
+    fixed: &[usize],
+    dims: usize,
+    num_reduced: usize,
+) -> Option<FinalCovariance> {
+    let mut h = hessian.clone();
+    if options.damping > 0.0 {
+        let d = S::from_f64(options.damping).expect("damping fits");
+        for i in 0..dims {
+            *h.coeff_ref(i, i) += d;
+        }
+    }
+
+    let linear = crate::options::LinearSolverOptions {
+        method: crate::backend::LinearSolverMethod::Ldlt,
+        allow_schur: true,
+        ..Default::default()
+    };
+    let mut solver = crate::sparse::SparseLinearSolvers::<S>::new(linear);
+    if !solver.analyze(&h, num_reduced) || !solver.compute(&h) {
+        return None;
+    }
+    let mut cov = solver.inverse(&h)?;
+
+    if options.zero_fixed_variances {
+        for &idx in fixed {
+            if idx < dims {
+                for j in 0..dims {
+                    cov.set_coeff(idx, j, S::zero());
+                    cov.set_coeff(j, idx, S::zero());
+                }
+            }
+        }
+    }
+
+    if options.scale_by_residual_variance {
+        let n = cost.num_residuals as f64;
+        let p = dims as f64;
+        if n > p && cost.cost.is_finite() {
+            let s2 = S::from_f64(cost.cost / (n - p)).expect("variance fits");
+            for j in 0..dims {
+                for i in 0..dims {
+                    let v = cov.coeff(i, j);
+                    if v != S::zero() {
+                        cov.set_coeff(i, j, v * s2);
+                    }
+                }
+            }
+        }
+    }
+
+    let result = match options.pattern {
+        CovariancePattern::FullDense => FinalCovariance::Dense(cov.cast::<f32>().to_dense()),
+        CovariancePattern::PreserveSparsity => {
+            FinalCovariance::Sparse(cov.mask_by_pattern(&h).cast::<f32>())
+        }
+        CovariancePattern::BlockDiagonal => {
+            let mut diag = crate::sparse::SparseMatrix::<S>::new(dims, dims);
+            for i in 0..dims {
+                let v = cov.coeff(i, i);
+                if v != S::zero() {
+                    diag.set_coeff(i, i, v);
+                }
+            }
+            FinalCovariance::Sparse(diag.cast::<f32>())
+        }
+        CovariancePattern::Auto | CovariancePattern::SchurPartitioned => {
+            FinalCovariance::Sparse(cov.cast::<f32>())
+        }
+    };
+    Some(result)
 }
 
 #[cfg(test)]

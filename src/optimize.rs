@@ -5,11 +5,13 @@
 
 use crate::backend::{Dynamic, Matrix, Vector};
 use crate::cost::Cost;
+use crate::hessian::HessianStorage;
 use crate::optimizers::AccumulationFn;
 use crate::optimizers::{bfgs, cg, dl, gd, gn, lbfgs, lm};
 use crate::options::{Options, Solver};
 use crate::params::Params;
 use crate::params_pack::ParamsPack;
+use crate::sparse::SparseMatrix;
 use crate::summary::Summary;
 
 /// Dynamic gradient type used by multi-parameter optimization.
@@ -24,6 +26,7 @@ pub type DynHessian = Matrix<f64, Dynamic>;
 pub fn optimize<P, F>(x: &mut P, f: F, options: &Options) -> Summary
 where
     P: Params,
+    Matrix<P::Scalar, P::Dim>: HessianStorage<P::Scalar>,
     F: AccumulationFn<P::Scalar, P::Dim>,
 {
     match options.solver_type {
@@ -41,6 +44,7 @@ where
 pub fn optimize_default<P, F>(x: &mut P, f: F) -> Summary
 where
     P: Params,
+    Matrix<P::Scalar, P::Dim>: HessianStorage<P::Scalar>,
     F: AccumulationFn<P::Scalar, P::Dim>,
 {
     optimize(x, f, &Options::default())
@@ -54,6 +58,7 @@ pub fn optimize_residuals<P, F>(x: &mut P, f: &F, options: &Options) -> Summary
 where
     P: Params<Scalar = f64>,
     P::Dim: crate::diff::AdDim,
+    Matrix<f64, P::Dim>: HessianStorage<f64>,
     F: crate::diff::ResidualsFn<Scalar = f64> + ?Sized,
 {
     optimize(x, crate::diff::ad_accumulation(f), options)
@@ -65,9 +70,44 @@ pub fn optimize_residuals_default<P, F>(x: &mut P, f: &F) -> Summary
 where
     P: Params<Scalar = f64>,
     P::Dim: crate::diff::AdDim,
+    Matrix<f64, P::Dim>: HessianStorage<f64>,
     F: crate::diff::ResidualsFn<Scalar = f64> + ?Sized,
 {
     optimize_residuals(x, f, &Options::default())
+}
+
+/// Optimize `x` in place with a sparse Hessian.
+///
+/// The accumulation function receives `Option<&mut SparseMatrix<...>>`; use
+/// `Params::reduced()` to enable the Schur-complement path.
+pub fn optimize_sparse<P, F>(x: &mut P, f: F, options: &Options) -> Summary
+where
+    P: Params,
+    F: AccumulationFn<P::Scalar, P::Dim, SparseMatrix<P::Scalar>>,
+{
+    match options.solver_type {
+        Solver::LevenbergMarquardt => {
+            lm::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::GaussNewton => {
+            gn::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::DogLeg => {
+            dl::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::GradientDescent => {
+            gd::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::ConjugateGradient => {
+            cg::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::Bfgs => {
+            bfgs::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::Lbfgs => {
+            lbfgs::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+    }
 }
 
 /// Optimize a scalar cost using forward-mode autodiff.
@@ -76,6 +116,7 @@ pub fn optimize_cost<P, F>(x: &mut P, f: &F, options: &Options) -> Summary
 where
     P: Params<Scalar = f64>,
     P::Dim: crate::diff::AdDim,
+    Matrix<f64, P::Dim>: HessianStorage<f64>,
     F: crate::diff::CostFn<Scalar = f64> + ?Sized,
 {
     optimize(x, crate::diff::cost_accumulation(f), options)
@@ -87,6 +128,7 @@ pub fn optimize_robust_residuals<P, F>(x: &mut P, f: &F, options: &Options) -> S
 where
     P: Params<Scalar = f64>,
     P::Dim: crate::diff::AdDim,
+    Matrix<f64, P::Dim>: HessianStorage<f64>,
     F: crate::diff::RobustResidualsFn<Scalar = f64> + ?Sized,
 {
     optimize(x, crate::diff::robust_accumulation(f), options)

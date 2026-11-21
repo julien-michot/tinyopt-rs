@@ -5,10 +5,10 @@
 
 use num_traits::ToPrimitive;
 
-use crate::backend::{DenseMatrix, DenseVector, Matrix, Vector, zeros_vector};
+use crate::backend::{DenseVector, Matrix, Vector, zeros_vector};
 use crate::cost::Cost;
-use crate::covariance::{CovarianceOptions, compute_covariance};
-use crate::math::mat_vec;
+use crate::covariance::{CovarianceOptions, FinalCovariance};
+use crate::hessian::HessianStorage;
 use crate::optimizers::fixed::FixedSet;
 use crate::optimizers::impl_fixed_api;
 use crate::optimizers::optimizer::{AccumulationFn, Algorithm, Step, neg_solve, run};
@@ -18,13 +18,17 @@ use crate::summary::Summary;
 
 /// Dog-leg optimizer, mirroring `tinyopt::dl::Optimizer`.
 #[derive(Clone, Debug)]
-pub struct Optimizer<P: Params> {
+pub struct Optimizer<
+    P: Params,
+    H: HessianStorage<<P as Params>::Scalar> = Matrix<<P as Params>::Scalar, <P as Params>::Dim>,
+> {
     options: Options,
     state: Option<State>,
-    _marker: core::marker::PhantomData<P>,
-    final_h: Option<Matrix<P::Scalar, P::Dim>>,
-    final_cost: Cost,
     fixed: FixedSet,
+    num_reduced: usize,
+    final_h: Option<H>,
+    final_cost: Cost,
+    _marker: core::marker::PhantomData<P>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,31 +38,19 @@ struct State {
     pending_boundary: bool,
 }
 
-impl<P: Params> Optimizer<P> {
+impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
     impl_fixed_api!();
-
-    /// Posterior covariance estimate (with default options).
-    pub fn covariance(&self) -> Option<Matrix<P::Scalar, P::Dim>> {
-        <Self as Algorithm<P>>::covariance(self, &CovarianceOptions::default())
-    }
-
-    /// Posterior covariance estimate with explicit options.
-    pub fn covariance_with(
-        &self,
-        options: &CovarianceOptions,
-    ) -> Option<Matrix<P::Scalar, P::Dim>> {
-        <Self as Algorithm<P>>::covariance(self, options)
-    }
 
     /// Create an optimizer with the given options.
     pub fn new(options: Options) -> Self {
         Self {
             options,
             state: None,
-            _marker: core::marker::PhantomData,
+            fixed: FixedSet::default(),
+            num_reduced: 0,
             final_h: None,
             final_cost: Cost::default(),
-            fixed: FixedSet::default(),
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -72,10 +64,30 @@ impl<P: Params> Optimizer<P> {
         self.state.as_ref().map_or(0.0, |s| s.radius)
     }
 
+    /// Whether a Schur reduced block was detected.
+    pub fn has_reduced(&self) -> bool {
+        self.num_reduced > 0
+    }
+
+    /// Number of reduced (head) parameters.
+    pub fn num_reduced(&self) -> usize {
+        self.num_reduced
+    }
+
+    /// Posterior covariance estimate (default options).
+    pub fn covariance(&self) -> Option<FinalCovariance> {
+        <Self as Algorithm<P, H>>::covariance(self, &CovarianceOptions::default())
+    }
+
+    /// Posterior covariance estimate with explicit options.
+    pub fn covariance_with(&self, options: &CovarianceOptions) -> Option<FinalCovariance> {
+        <Self as Algorithm<P, H>>::covariance(self, options)
+    }
+
     /// Optimize `x` in place.
     pub fn optimize<F>(&mut self, x: &mut P, f: F) -> Summary
     where
-        F: AccumulationFn<P::Scalar, P::Dim>,
+        F: AccumulationFn<P::Scalar, P::Dim, H>,
     {
         let options = self.options.clone();
         run(x, f, &options, self)
@@ -91,26 +103,7 @@ fn scaled<S: crate::real::Real, D: crate::backend::Dim>(
     out
 }
 
-impl<P: Params> Algorithm<P> for Optimizer<P> {
-    fn fixed(&self) -> &FixedSet {
-        &self.fixed
-    }
-
-    fn save_final_system(&mut self, h: &Matrix<P::Scalar, P::Dim>, cost: Cost) {
-        self.final_h = Some(h.clone());
-        self.final_cost = cost;
-    }
-
-    fn covariance(&self, options: &CovarianceOptions) -> Option<Matrix<P::Scalar, P::Dim>> {
-        let h = self.final_h.as_ref()?;
-        compute_covariance::<P::Scalar, P::Dim>(
-            h,
-            options,
-            self.final_cost,
-            self.fixed.indices(),
-            h.nrows(),
-        )
-    }
+impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H> {
     fn reset(&mut self, _dims: usize) {
         self.state = Some(State {
             radius: (self.options.dl.radius_init as f64).max(f64::EPSILON),
@@ -119,17 +112,20 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
         });
     }
 
-    fn precondition(
-        &mut self,
-        _grad: &mut Vector<P::Scalar, P::Dim>,
-        _h: &mut Matrix<P::Scalar, P::Dim>,
-    ) {
+    fn set_num_reduced(&mut self, num_reduced: usize) {
+        self.num_reduced = num_reduced;
     }
+
+    fn fixed(&self) -> &FixedSet {
+        &self.fixed
+    }
+
+    fn precondition(&mut self, _grad: &mut Vector<P::Scalar, P::Dim>, _h: &mut H) {}
 
     fn solve(
         &mut self,
         grad: &Vector<P::Scalar, P::Dim>,
-        h: &Matrix<P::Scalar, P::Dim>,
+        h: &H,
     ) -> Option<Step<P::Scalar, P::Dim>> {
         let state = self.state.as_mut().expect("reset() must be called first");
         let n = grad.len();
@@ -141,11 +137,15 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
             return Some((zeros_vector::<P::Scalar, P::Dim>(n), 0.0));
         }
         let gradient_norm = gradient_norm2.sqrt();
+        let grad_slice = DenseVector::as_slice(grad);
 
         // Gauss-Newton step and Cauchy point.
-        let gauss_newton = neg_solve::<P::Scalar, P::Dim>(&self.options, grad, h);
-        let hg = mat_vec::<P::Scalar, P::Dim>(h, grad);
-        let curvature = DenseVector::dot(grad, &hg).to_f64().unwrap_or(0.0);
+        let gauss_newton =
+            neg_solve::<P::Scalar, P::Dim, H>(&self.options, grad, h, self.num_reduced);
+        let hg = h.mul_vec(grad_slice);
+        let curvature = (0..n).fold(0.0, |acc, i| {
+            acc + grad.at(i).to_f64().unwrap_or(0.0) * hg[i].to_f64().unwrap_or(0.0)
+        });
         let cauchy = if curvature > f64::EPSILON {
             scaled::<P::Scalar, P::Dim>(-(gradient_norm2 / curvature), grad)
         } else {
@@ -175,9 +175,13 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
         }
 
         // Predicted reduction of the model.
-        let h_step = mat_vec::<P::Scalar, P::Dim>(h, &step);
-        let predicted = -DenseVector::dot(grad, &step).to_f64().unwrap_or(0.0)
-            - 0.5 * DenseVector::dot(&step, &h_step).to_f64().unwrap_or(0.0);
+        let h_step = h.mul_vec(DenseVector::as_slice(&step));
+        let predicted = -(0..n).fold(0.0, |acc, i| {
+            acc + grad.at(i).to_f64().unwrap_or(0.0) * step.at(i).to_f64().unwrap_or(0.0)
+        }) - 0.5
+            * (0..n).fold(0.0, |acc, i| {
+                acc + step.at(i).to_f64().unwrap_or(0.0) * h_step[i].to_f64().unwrap_or(0.0)
+            });
 
         state.pending_prediction = predicted;
         state.pending_boundary = on_boundary;
@@ -193,6 +197,7 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
                     .min(self.options.dl.radius_max as f64);
             }
             state.pending_boundary = false;
+            state.pending_prediction = 0.0;
         }
     }
 
@@ -200,7 +205,23 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
         if let Some(state) = self.state.as_mut() {
             state.radius *= self.options.dl.shrink_factor as f64;
             state.pending_boundary = false;
+            state.pending_prediction = 0.0;
         }
+    }
+
+    fn save_final_system(&mut self, h: &H, cost: Cost) {
+        self.final_h = Some(h.clone());
+        self.final_cost = cost;
+    }
+
+    fn covariance(&self, options: &CovarianceOptions) -> Option<FinalCovariance> {
+        let h = self.final_h.as_ref()?;
+        h.to_final_covariance(
+            options,
+            self.final_cost,
+            self.fixed.indices(),
+            self.num_reduced,
+        )
     }
 }
 

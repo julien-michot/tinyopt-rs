@@ -3,10 +3,13 @@
 
 //! BFGS optimizer with a dense inverse-Hessian approximation.
 
-use num_traits::{Float, FromPrimitive, One, Zero};
+use num_traits::{Float, FromPrimitive, One, ToPrimitive, Zero};
 
-use crate::backend::{DenseMatrix, DenseVector, Matrix, Vector, zeros_vector};
-use crate::covariance::CovarianceOptions;
+use crate::backend::{
+    DenseMatrix, DenseVector, Dynamic, Matrix, Vector, zeros_matrix, zeros_vector,
+};
+use crate::covariance::{CovarianceOptions, FinalCovariance};
+use crate::hessian::HessianStorage;
 use crate::math::{all_finite, mat_identity, mat_mul, mat_transpose, mat_vec};
 use crate::optimizers::fixed::FixedSet;
 use crate::optimizers::impl_fixed_api;
@@ -20,10 +23,14 @@ use crate::summary::Summary;
 /// Maintains a dense inverse-Hessian approximation, also exposed as the
 /// posterior covariance estimate.
 #[derive(Clone, Debug)]
-pub struct Optimizer<P: Params> {
+pub struct Optimizer<
+    P: Params,
+    H: HessianStorage<<P as Params>::Scalar> = Matrix<<P as Params>::Scalar, <P as Params>::Dim>,
+> {
     options: Options,
     state: Option<State<P>>,
     fixed: FixedSet,
+    _marker: core::marker::PhantomData<H>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,14 +47,16 @@ struct State<P: Params> {
     update_available: bool,
 }
 
-impl<P: Params> Optimizer<P> {
+impl<P: Params, H: HessianStorage<P::Scalar>> Optimizer<P, H> {
     impl_fixed_api!();
+
     /// Create an optimizer with the given options.
     pub fn new(options: Options) -> Self {
         Self {
             options,
             state: None,
             fixed: FixedSet::default(),
+            _marker: core::marker::PhantomData,
         }
     }
 
@@ -72,27 +81,20 @@ impl<P: Params> Optimizer<P> {
     /// Optimize `x` in place.
     pub fn optimize<F>(&mut self, x: &mut P, f: F) -> Summary
     where
-        F: AccumulationFn<P::Scalar, P::Dim>,
+        F: AccumulationFn<P::Scalar, P::Dim, H>,
     {
         let options = self.options.clone();
         run(x, f, &options, self)
     }
 }
 
-impl<P: Params> Algorithm<P> for Optimizer<P> {
-    fn fixed(&self) -> &FixedSet {
-        &self.fixed
-    }
-
-    fn covariance(&self, _options: &CovarianceOptions) -> Option<Matrix<P::Scalar, P::Dim>> {
-        self.state
-            .as_ref()
-            .filter(|s| s.matrix_initialized)
-            .map(|s| s.inverse_hessian.clone())
-    }
-
+impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H> {
     fn needs_hessian(&self) -> bool {
         false
+    }
+
+    fn fixed(&self) -> &FixedSet {
+        &self.fixed
     }
 
     fn reset(&mut self, dims: usize) {
@@ -128,17 +130,12 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
         state.has_step = false;
     }
 
-    fn precondition(
-        &mut self,
-        _grad: &mut Vector<P::Scalar, P::Dim>,
-        _h: &mut Matrix<P::Scalar, P::Dim>,
-    ) {
-    }
+    fn precondition(&mut self, _grad: &mut Vector<P::Scalar, P::Dim>, _h: &mut H) {}
 
     fn solve(
         &mut self,
         grad: &Vector<P::Scalar, P::Dim>,
-        _h: &Matrix<P::Scalar, P::Dim>,
+        _h: &H,
     ) -> Option<Step<P::Scalar, P::Dim>> {
         let state = self.state.as_mut().expect("reset() must be called first");
         let n = grad.len();
@@ -183,6 +180,26 @@ impl<P: Params> Algorithm<P> for Optimizer<P> {
             state.update_available = false;
         }
     }
+
+    fn covariance(&self, _options: &CovarianceOptions) -> Option<FinalCovariance> {
+        let state = self.state.as_ref().filter(|s| s.matrix_initialized)?;
+        let n = state.inverse_hessian.nrows();
+        let mut out = zeros_matrix::<f32, Dynamic>(n, n);
+        for i in 0..n {
+            for j in 0..n {
+                out.set_elem(
+                    i,
+                    j,
+                    state
+                        .inverse_hessian
+                        .elem(i, j)
+                        .to_f32()
+                        .expect("fits in f32"),
+                );
+            }
+        }
+        Some(FinalCovariance::Dense(out))
+    }
 }
 
 fn update_bfgs<P: Params>(state: &mut State<P>, options: &Options) {
@@ -201,7 +218,6 @@ fn update_bfgs<P: Params>(state: &mut State<P>, options: &Options) {
 
     let inv_c = P::Scalar::one() / curvature;
 
-    // transform = I - (1 / sᵀy) s yᵀ
     let mut transform = mat_identity::<P::Scalar, P::Dim>(n);
     for i in 0..n {
         for j in 0..n {
@@ -211,7 +227,6 @@ fn update_bfgs<P: Params>(state: &mut State<P>, options: &Options) {
         }
     }
 
-    // Hinv = transform * Hinv * transformᵀ + (1 / sᵀy) s sᵀ
     let tmp = mat_mul::<P::Scalar, P::Dim>(&transform, &state.inverse_hessian);
     let mut updated =
         mat_mul::<P::Scalar, P::Dim>(&tmp, &mat_transpose::<P::Scalar, P::Dim>(&transform));

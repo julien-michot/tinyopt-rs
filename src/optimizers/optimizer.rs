@@ -4,16 +4,17 @@
 //! Shared optimizer machinery: the accumulation function contract and the
 //! common trust-region / line-search loop, mirroring tinyopt's
 //! `OptimizerCore::OptimizeAcc`.
+//!
+//! The loop is generic over the Hessian storage (`HessianStorage`), so the same
+//! code drives dense, sparse and block Hessians.
 
 use num_traits::{One, ToPrimitive, Zero};
 use std::time::Instant;
 
-use crate::backend::{
-    DenseMatrix, DenseVector, Dim, LinearSolverMethod, Matrix, Vector, solve, zeros_matrix,
-    zeros_vector,
-};
+use crate::backend::{DenseVector, Dim, Matrix, Vector, zeros_vector};
 use crate::cost::Cost;
-use crate::covariance::CovarianceOptions;
+use crate::covariance::{CovarianceOptions, FinalCovariance};
+use crate::hessian::HessianStorage;
 use crate::math::{all_finite, max_abs};
 use crate::optimizers::fixed::FixedSet;
 use crate::options::{LineSearchMethod, Options};
@@ -28,32 +29,12 @@ use crate::summary::Summary;
 /// requests only the outputs it needs, so the same function can be used for
 /// evaluation (`None`, `None`), first-order steps, or second-order steps.
 ///
-/// ```
-/// use tinyopt_rs::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-/// use tinyopt_rs::{Cost, Static};
-///
-/// type Vec2 = Vector<f64, Static<2>>;
-/// type Mat2 = Matrix<f64, Static<2>>;
-///
-/// let acc = |x: &[f64], grad: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
-///     let r0 = x[0] * x[0] - 2.0;
-///     let r1 = x[0] * x[1] - 3.0;
-///     if let Some(g) = grad {
-///         g.set_at(0, 2.0 * x[0] * r0 + x[1] * r1);
-///         g.set_at(1, x[0] * r1);
-///     }
-///     if let Some(h) = h {
-///         h.set_elem(0, 0, 4.0 * x[0] * x[0] + x[1] * x[1]);
-///         h.set_elem(0, 1, 2.0 * x[0] * x[1] + x[1] * x[0]);
-///         h.set_elem(1, 0, 2.0 * x[0] * x[1] + x[1] * x[0]);
-///         h.set_elem(1, 1, x[0] * x[0]);
-///     }
-///     Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
-/// };
-/// ```
-pub trait AccumulationFn<S: Real, D: Dim> {
+/// The Hessian parameter defaults to the dense backend matrix, so existing
+/// closures compile unchanged; sparse and block accumulations name their
+/// storage type explicitly.
+pub trait AccumulationFn<S: Real, D: Dim, H: HessianStorage<S> = Matrix<S, D>> {
     /// Evaluate the cost at `x` and, when requested, the gradient and Hessian.
-    fn eval(&self, x: &[S], grad: Option<&mut Vector<S, D>>, h: Option<&mut Matrix<S, D>>) -> Cost;
+    fn eval(&self, x: &[S], grad: Option<&mut Vector<S, D>>, h: Option<&mut H>) -> Cost;
 
     /// Whether this accumulator uses numerical differentiation.
     fn uses_numerical_diff(&self) -> bool {
@@ -61,13 +42,14 @@ pub trait AccumulationFn<S: Real, D: Dim> {
     }
 }
 
-impl<S, D, F> AccumulationFn<S, D> for F
+impl<S, D, H, F> AccumulationFn<S, D, H> for F
 where
     S: Real,
     D: Dim,
-    F: Fn(&[S], Option<&mut Vector<S, D>>, Option<&mut Matrix<S, D>>) -> Cost,
+    H: HessianStorage<S>,
+    F: Fn(&[S], Option<&mut Vector<S, D>>, Option<&mut H>) -> Cost,
 {
-    fn eval(&self, x: &[S], grad: Option<&mut Vector<S, D>>, h: Option<&mut Matrix<S, D>>) -> Cost {
+    fn eval(&self, x: &[S], grad: Option<&mut Vector<S, D>>, h: Option<&mut H>) -> Cost {
         self(x, grad, h)
     }
 }
@@ -76,37 +58,27 @@ where
 pub(crate) type Step<S, D> = (Vector<S, D>, f64);
 
 /// Algorithm-specific step logic (LM damping, GN, trust region, ...).
-pub(crate) trait Algorithm<P: Params> {
+pub(crate) trait Algorithm<P: Params, H: HessianStorage<P::Scalar>> {
     /// Initialize per-problem state.
     fn reset(&mut self, dims: usize);
 
     /// Whether the optimizer needs the Hessian approximation.
-    ///
-    /// First-order methods return `false`, so accumulators are called with
-    /// `h == None` and users do not have to compute `JᵀJ`.
     fn needs_hessian(&self) -> bool {
         true
     }
+
+    /// Number of reduced (head) parameters for the Schur solve.
+    fn set_num_reduced(&mut self, _num_reduced: usize) {}
 
     /// Called after each accumulation, with the newly built gradient.
     fn on_build(&mut self, _grad: &Vector<P::Scalar, P::Dim>) {}
 
     /// Precondition the normal equations before solving (Jacobi scaling, damping).
-    fn precondition(
-        &mut self,
-        grad: &mut Vector<P::Scalar, P::Dim>,
-        h: &mut Matrix<P::Scalar, P::Dim>,
-    );
+    fn precondition(&mut self, grad: &mut Vector<P::Scalar, P::Dim>, h: &mut H);
 
-    /// Solve the (already preconditioned) normal equations.
-    ///
-    /// Returns the step to apply to the parameters (in original coordinates)
-    /// together with the predicted error reduction, used for the step quality.
-    fn solve(
-        &mut self,
-        grad: &Vector<P::Scalar, P::Dim>,
-        h: &Matrix<P::Scalar, P::Dim>,
-    ) -> Option<Step<P::Scalar, P::Dim>>;
+    /// Solve the preconditioned normal equations.
+    fn solve(&mut self, grad: &Vector<P::Scalar, P::Dim>, h: &H)
+    -> Option<Step<P::Scalar, P::Dim>>;
 
     /// Called with the final step (after an optional line search).
     fn update_step(&mut self, _step: &Vector<P::Scalar, P::Dim>) {}
@@ -121,10 +93,10 @@ pub(crate) trait Algorithm<P: Params> {
     fn fixed(&self) -> &FixedSet;
 
     /// Store the final (un-damped) system for covariance export.
-    fn save_final_system(&mut self, _h: &Matrix<P::Scalar, P::Dim>, _cost: Cost) {}
+    fn save_final_system(&mut self, _h: &H, _cost: Cost) {}
 
     /// Covariance approximation from the final system, if available.
-    fn covariance(&self, _options: &CovarianceOptions) -> Option<Matrix<P::Scalar, P::Dim>> {
+    fn covariance(&self, _options: &CovarianceOptions) -> Option<FinalCovariance> {
         None
     }
 }
@@ -141,11 +113,12 @@ fn notify_step(options: &Options, dx: &[f32], is_rollback: bool) -> bool {
 }
 
 /// Run the optimization loop for a given algorithm.
-pub(crate) fn run<P, F, A>(x: &mut P, f: F, options: &Options, algo: &mut A) -> Summary
+pub(crate) fn run<P, F, A, H>(x: &mut P, f: F, options: &Options, algo: &mut A) -> Summary
 where
     P: Params,
-    F: AccumulationFn<P::Scalar, P::Dim>,
-    A: Algorithm<P>,
+    H: HessianStorage<P::Scalar>,
+    F: AccumulationFn<P::Scalar, P::Dim, H>,
+    A: Algorithm<P, H>,
 {
     let mut sum = Summary::default();
     let start = Instant::now();
@@ -157,8 +130,19 @@ where
     }
 
     let mut grad = zeros_vector::<P::Scalar, P::Dim>(dims);
-    let mut h = zeros_matrix::<P::Scalar, P::Dim>(dims, dims);
+    let mut h = H::zeros(dims);
     algo.reset(dims);
+
+    // Reduced (Schur) block: the C++ contract requires it at the head.
+    let num_reduced = match x.reduced() {
+        Some((0, count)) => count.min(dims),
+        Some((start, _)) => {
+            log::warn!("reduced parameters must start at 0 (got {start}); disabling Schur");
+            0
+        }
+        None => 0,
+    };
+    algo.set_num_reduced(num_reduced);
 
     // Fixed parameters: explicit `fix()` indices take precedence over the
     // `Params::fixed()` trait method, matching the C++ API (with a warning).
@@ -192,7 +176,7 @@ where
     for _iter in 0..max_iters {
         // --- Build the linear system at the current parameters ---------------
         DenseVector::set_zero(&mut grad);
-        DenseMatrix::set_zero(&mut h);
+        h.set_zero();
         let build = if algo.needs_hessian() {
             f.eval(P::as_slice(x), Some(&mut grad), Some(&mut h))
         } else {
@@ -205,7 +189,7 @@ where
         }
         if !build.cost.is_finite()
             || !all_finite(DenseVector::as_slice(&grad))
-            || !all_finite_matrix(&h)
+            || !h.is_all_finite()
         {
             reason = StopReason::SystemHasNanOrInf;
             break;
@@ -219,10 +203,9 @@ where
         for &idx in &fixed {
             if idx < dims {
                 grad.set_at(idx, P::Scalar::zero());
-                h.zero_row_col(idx);
-                h.set_elem(idx, idx, P::Scalar::one());
             }
         }
+        h.apply_fixed_indices(&fixed);
 
         if options.log.enable {
             log::trace!("#{}: cost = {:.6e}", sum.num_iters, build.cost);
@@ -325,7 +308,6 @@ where
                 reason = StopReason::MinRelError;
             }
         } else {
-            // Roll back to the previous parameters.
             let mut neg_dx = dx.clone();
             DenseVector::scale(&mut neg_dx, -P::Scalar::one());
             let neg_f32: Vec<f32> = if needs_f32 {
@@ -399,28 +381,17 @@ where
     // Store the final system so that covariance is available to optimizer
     // objects even when no export was requested.
     if algo.needs_hessian() {
-        let mut final_h = zeros_matrix::<P::Scalar, P::Dim>(dims, dims);
+        let mut final_h = H::zeros(dims);
         let _ = f.eval(P::as_slice(x), None, Some(&mut final_h));
-        for &idx in &fixed {
-            if idx < dims {
-                final_h.zero_row_col(idx);
-                final_h.set_elem(idx, idx, P::Scalar::one());
-            }
-        }
+        final_h.apply_fixed_indices(&fixed);
         algo.save_final_system(&final_h, sum.final_cost);
     } else {
-        algo.save_final_system(&h, sum.final_cost);
+        algo.save_final_system(&H::zeros(dims), sum.final_cost);
     }
 
     if options.exp.final_cov {
         if let Some(cov) = algo.covariance(&options.exp.cov_options) {
-            let mut out = zeros_matrix::<f32, crate::backend::Dynamic>(dims, dims);
-            for i in 0..dims {
-                for j in 0..dims {
-                    out.set_elem(i, j, cov.elem(i, j).to_f32().expect("fits in f32"));
-                }
-            }
-            sum.final_cov = Some(out);
+            sum.final_cov = Some(cov);
         }
     }
 
@@ -434,24 +405,23 @@ where
     sum
 }
 
-fn all_finite_matrix<S: Real, M: DenseMatrix<S>>(m: &M) -> bool {
-    (0..m.nrows()).all(|i| (0..m.ncols()).all(|j| m.elem(i, j).is_finite()))
-}
-
-/// Solve `H dx = -grad` with the configured linear solver.
-pub(crate) fn neg_solve<S: Real, D: Dim>(
+/// Solve `H dx = -grad` with the given Hessian storage.
+pub(crate) fn neg_solve<S: Real, D: Dim, H: HessianStorage<S>>(
     options: &Options,
     grad: &Vector<S, D>,
-    h: &Matrix<S, D>,
+    h: &H,
+    num_reduced: usize,
 ) -> Option<Vector<S, D>> {
     let mut neg_grad = grad.clone();
     DenseVector::scale(&mut neg_grad, -S::one());
-    solve::<S, D>(options.linear.method, h, &neg_grad)
-}
-
-#[allow(dead_code)]
-pub(crate) fn linear_method(options: &Options) -> LinearSolverMethod {
-    options.linear.method
+    let mut out = zeros_vector::<S, D>(grad.len());
+    let ok = h.solve_into(
+        &options.linear,
+        DenseVector::as_slice(&neg_grad),
+        num_reduced,
+        DenseVector::as_mut_slice(&mut out),
+    );
+    if ok { Some(out) } else { None }
 }
 
 /// Scale a step by `alpha`.
@@ -463,10 +433,11 @@ fn scaled_step<S: Real, D: Dim>(alpha: f64, dx: &Vector<S, D>) -> Vector<S, D> {
 }
 
 /// Cost at `x + alpha * dx`, leaving `x` unchanged.
-fn trial_cost<P, F>(x: &mut P, alpha: f64, dx: &Vector<P::Scalar, P::Dim>, f: &F) -> f64
+fn trial_cost<P, F, H>(x: &mut P, alpha: f64, dx: &Vector<P::Scalar, P::Dim>, f: &F) -> f64
 where
     P: Params,
-    F: AccumulationFn<P::Scalar, P::Dim>,
+    H: HessianStorage<P::Scalar>,
+    F: AccumulationFn<P::Scalar, P::Dim, H>,
 {
     let step = scaled_step::<P::Scalar, P::Dim>(alpha, dx);
     P::plus_eq(x, DenseVector::as_slice(&step));
@@ -478,10 +449,8 @@ where
 }
 
 /// Backtracking / Wolfe / golden-section search along `dx`.
-///
-/// Mirrors `OptimizerCore::LineSearchStep`: returns the step to apply
-/// (already scaled by the selected `alpha`).
-fn line_search<P, F>(
+#[allow(clippy::too_many_arguments)]
+fn line_search<P, F, H>(
     x: &mut P,
     dx: &Vector<P::Scalar, P::Dim>,
     f0: f64,
@@ -491,7 +460,8 @@ fn line_search<P, F>(
 ) -> Vector<P::Scalar, P::Dim>
 where
     P: Params,
-    F: AccumulationFn<P::Scalar, P::Dim>,
+    H: HessianStorage<P::Scalar>,
+    F: AccumulationFn<P::Scalar, P::Dim, H>,
 {
     let directional = to_f64(DenseVector::dot(grad, dx));
     if directional >= 0.0 || !directional.is_finite() {
@@ -508,7 +478,7 @@ where
         LineSearchMethod::None => return dx.clone(),
         LineSearchMethod::Backtracking => {
             for _ in 0..ls.max_iters {
-                let f_trial = trial_cost(x, alpha, dx, f);
+                let f_trial = trial_cost::<P, F, H>(x, alpha, dx, f);
                 if f_trial.is_finite() && f_trial <= f0 + c1 * alpha * directional {
                     best_alpha = alpha;
                     break;
@@ -522,7 +492,7 @@ where
         }
         LineSearchMethod::Wolfe => {
             for _ in 0..ls.max_iters {
-                let f_trial = trial_cost(x, alpha, dx, f);
+                let f_trial = trial_cost::<P, F, H>(x, alpha, dx, f);
                 if f_trial.is_finite() && f_trial <= f0 + c1 * alpha * directional {
                     best_alpha = alpha;
                     break;
@@ -548,22 +518,22 @@ where
             if h > min_step {
                 let mut c = a + INVPHI2 * h;
                 let mut d = a + INVPHI * h;
-                let mut fc = trial_cost(x, c, dx, f);
-                let mut fd = trial_cost(x, d, dx, f);
+                let mut fc = trial_cost::<P, F, H>(x, c, dx, f);
+                let mut fd = trial_cost::<P, F, H>(x, d, dx, f);
                 for _ in 0..ls.max_iters {
                     if fc < fd {
                         d = c;
                         fd = fc;
                         h *= INVPHI;
                         c = a + INVPHI2 * h;
-                        fc = trial_cost(x, c, dx, f);
+                        fc = trial_cost::<P, F, H>(x, c, dx, f);
                     } else {
                         a = c;
                         c = d;
                         fc = fd;
                         h *= INVPHI;
                         d = a + INVPHI * h;
-                        fd = trial_cost(x, d, dx, f);
+                        fd = trial_cost::<P, F, H>(x, d, dx, f);
                     }
                     if h < min_step {
                         break;

@@ -75,6 +75,7 @@ pub mod cost;
 pub mod covariance;
 pub mod diff;
 pub mod distances;
+pub mod hessian;
 pub mod losses;
 pub mod math;
 pub mod optimizers;
@@ -90,13 +91,13 @@ mod optimize;
 
 pub use backend::{Dim, Dynamic, Static};
 pub use cost::Cost;
-pub use covariance::CovarianceOptions;
+pub use covariance::{CovarianceOptions, CovariancePattern, FinalCovariance};
 pub use math::inverse;
 #[cfg(feature = "autodiff")]
 pub use optimize::optimize_robust_residuals;
 pub use optimize::{
-    DynGradient, DynHessian, optimize, optimize_default, optimize2, optimize2_default, optimize3,
-    optimize3_default,
+    DynGradient, DynHessian, optimize, optimize_default, optimize_sparse, optimize2,
+    optimize2_default, optimize3, optimize3_default,
 };
 #[cfg(feature = "autodiff")]
 pub use optimize::{optimize_cost, optimize_residuals, optimize_residuals_default};

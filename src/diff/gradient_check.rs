@@ -4,8 +4,9 @@
 //! Gradient and Hessian verification, mirroring tinyopt's
 //! `diff::CheckGradient` and `diff::CheckResidualsGradient`.
 
-use crate::backend::{DenseMatrix, DenseVector, Dim, zeros_matrix, zeros_vector};
+use crate::backend::{DenseMatrix, DenseVector, Dim, Matrix, zeros_matrix, zeros_vector};
 use crate::diff::num_diff::{Method, estimate_num_jac, num_eval};
+use crate::hessian::HessianStorage;
 use crate::optimizers::AccumulationFn;
 use crate::real::Real;
 
@@ -26,6 +27,7 @@ pub fn check_gradient<S, D, F>(x: &[S], f: &F, eps: f64, method: Method, verbose
 where
     S: Real,
     D: Dim,
+    Matrix<S, D>: HessianStorage<S>,
     F: AccumulationFn<S, D> + ?Sized,
 {
     let n = x.len();
@@ -67,6 +69,7 @@ pub fn check_residuals_gradient<S, D, R, A>(
 where
     S: Real,
     D: Dim,
+    Matrix<S, D>: HessianStorage<S>,
     R: Fn(&[S]) -> Vec<S> + ?Sized,
     A: AccumulationFn<S, D> + ?Sized,
 {
