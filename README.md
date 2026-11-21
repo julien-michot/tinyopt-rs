@@ -82,6 +82,7 @@ assert!(summary.converged());
 | M3 | direct autodiff accumulation, robust blocks, AD type coverage | ✅ |
 | M4 | fixed params, covariance, multi-params, manifolds | ✅ |
 | M5 | examples, benchmarks, docs parity | ✅ |
+| M6 | sparse, block-tridiagonal and block-sparse systems | ✅ |
 
 ## Losses and distances
 
@@ -110,6 +111,34 @@ let cov = opt.covariance_with(&CovarianceOptions::default());
 `optimize2` / `optimize3` run several parameters together (packed internally and
 written back once), and `ParamsWrapper` adapts manifold-style parameter types.
 
+## Sparse and block-structured problems
+
+Scalar sparse Hessians, block-tridiagonal Hessians and compile-time block-sparse
+Hessians share the same optimizer API:
+
+```rust
+use tinyopt_rs::sparse::SparseMat;
+use tinyopt_rs::{Options, optimize_sparse};
+
+let mut x = vec![0.0_f64; 5];
+let summary = optimize_sparse(&mut x, |x, grad, h| {
+    // grad: Option<&mut Vector<f64, Dynamic>>
+    // h:    Option<&mut SparseMat> (triplets or coeff_ref)
+    tinyopt_rs::Cost::with_num_residuals(0.0, 1)
+}, &Options::default());
+```
+
+- `SparseMatrix<S>` (CSC) with triplet assembly, `coeff_ref`, symmetric
+  completion and a simplicial LDLᵀ (`SimplicialLdl`), including the scalar Schur
+  complement path.
+- `BlockTridiagMat<B>` (fixed block size) and `BlockTridiagMatX<S>` (dynamic) with
+  block Thomas/Takahashi factorization (`BlockTridiagLdlt`).
+- `block_sparse_types!` + `BlockSparseMat<T, S>` with compile-time block-pair
+  checks and an exact Schur solver (`BlockSparseLdlt`); `BlockSparseMatX<S>` for
+  runtime layouts.
+- `Params::reduced()` selects the Schur reduced head block
+  (`has_reduced`/`num_reduced` on LM, GN and DogLeg).
+
 ## Examples and benchmarks
 
 The seven dense C++ examples are ported one-to-one:
@@ -122,6 +151,8 @@ cargo run --example finance
 cargo run --example physics
 cargo run --example robotics
 cargo run --example signal_processing
+cargo run --example bundle_adjustment        # sparse Hessian + Schur
+
 ```
 
 Benchmarks mirror the C++ dense suites (f64/f32, static/dynamic, prior and
@@ -129,6 +160,7 @@ Benchmarks mirror the C++ dense suites (f64/f32, static/dynamic, prior and
 
 ```shell
 cargo bench --bench dense
+cargo bench --bench sparse
 ```
 
 ## Documentation

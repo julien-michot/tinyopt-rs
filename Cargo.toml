@@ -49,6 +49,10 @@ criterion = "0.8"
 name = "dense"
 harness = false
 
+[[bench]]
+name = "sparse"
+harness = false
+
 [[example]]
 name = "astronomy"
 required-features = ["autodiff"]

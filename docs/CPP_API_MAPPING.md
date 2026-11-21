@@ -167,3 +167,47 @@ impl RobustResidualsFn for Problem {
 - `nalgebra` (default): static (`Static<N>`) and dynamic (`Dynamic`) sizes.
 - `faer`: dynamic sizes; `Static<N>` is runtime-checked but heap-backed, so the
   zero-allocation guarantee does not apply.
+
+## Sparse and block-structured systems
+
+| C++ | Rust |
+|---|---|
+| `SparseMat` / `SparseMatf` | `SparseMatrix<f64>` / `SparseMatrix<f32>` (aliases `SparseMat`, `SparseMatf`) |
+| `SparseMatrix<Scalar>` (Eigen CSC) | `SparseMatrix<S>` (CSC, triplets, `coeff_ref`, lower/upper completion) |
+| `Eigen::SimplicialLDLT` | `SimplicialLdl` (elimination tree + left-looking LDLᵀ) |
+| `SparseLinearSolvers` | `SparseLinearSolvers` (analyze/compute/solve, scalar Schur) |
+| `LinearSolverMethod::SuiteSparse` | mapped to `Ldlt` (no CHOLMOD dependency) |
+| `LinearSolverMethod::IncompleteCholesky` | mapped to `Ldlt` |
+| `BlockTridiagMat<B>` | `BlockTridiagMat<B>` (fixed block size) |
+| `BlockTridiagMatX` | `BlockTridiagMat<0, S>` / `BlockTridiagMatX<S>` |
+| `BlockTridiagLDLT` | `BlockTridiagLdlt` (Thomas + Takahashi inverse) |
+| `BlockSparseMatrix<Scalar, 6, 3>` | `block_sparse_types!(T, [6, 3])` + `BlockSparseMat<T, S>` |
+| `BlockSparseMatX` | `BlockSparseMatX<S>` (runtime layout) |
+| `BlockSparseLDLT` | `BlockSparseLdlt<T, S>` (direct or Schur) |
+| `hessian.block<R,C>(r, c)` | `h.block_mut::<R, C>(r, c)` (compile-time `HasPair` check) |
+| `h.diagonal<S>(i)` | `h.diagonal_mut::<N>(i)` |
+| `h.diagonal(i)` / `h.off_diagonal(i)` (tridiag) | `h.diagonal(i)` / `h.off_diagonal(i)` |
+| `h.coeffRef(i, j) += v` | `*h.coeff_ref(i, j) += v` |
+| `h.setFromTriplets(...)` | `SparseMatrix::from_triplets(rows, cols, &triplets)` |
+| `h.toDense()` / `h.toSparse()` | `h.to_dense()` / `h.to_sparse()` |
+| `traits::reduced(x)` | `Params::reduced(&self) -> Option<(start, count)>` |
+| `optimizer.setReduced(n)` / `hasReduced()` / `numReduced()` | `set_reduced(n)` / `has_reduced()` / `num_reduced()` (LM, GN, DogLeg) |
+| `Optimize(x, loss)` with sparse `H` | `optimize_sparse(&mut x, acc, &options)` |
+| block-tridiagonal `H` | `optimize_tridiag::<B, _, _>(...)` |
+| block-sparse `H` | `optimize_block_sparse::<T, _, _>(...)` |
+| `optimizer.InitWith(prototype)` | `optimizer.init_with(prototype)` (dynamic block layouts) |
+| `CovariancePattern::{Auto, BlockDiagonal, PreserveSparsity, SchurPartitioned, FullDense}` | same variants in `CovarianceOptions::pattern` |
+| `Summary::final_cov` (variant) | `FinalCovariance::{Dense, Sparse, BlockTridiag, BlockSparse}` |
+
+Implementation notes:
+
+- The scalar sparse solver uses natural ordering (no AMD); exactness is
+  unaffected.
+- `BlockSparseLdlt` uses an exact dense-partition Schur complement (reduced
+  head block + inverted eliminated block). The C++ independent/coupled block
+  elimination and AMD ordering are not implemented; results match, performance
+  differs on large problems.
+- `BlockTridiagLdlt` matches the C++ banded inverse semantics (diagonal and
+  first super-diagonal blocks of the covariance).
+- Fixed parameters are masked (row/column zeroing); the dynamic fixed-parameter
+  permutation optimization is not ported.

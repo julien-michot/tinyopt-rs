@@ -4,7 +4,7 @@
 //! Compile-time block-sparse symmetric matrices, mirroring tinyopt's
 //! `BlockSparseMatrix<Scalar, BlockSizes...>` (upper type pairs only).
 //!
-//! Block sizes are declared with [`block_sparse_types!`], which also generates
+//! Block sizes are declared with `block_sparse_types!`, which also generates
 //! the compile-time `HasPair<R, C>` checks used by [`BlockSparseMat::block_mut`].
 
 use std::collections::BTreeMap;
@@ -542,6 +542,67 @@ pub struct BlockSparseMatX<S: Real = f64> {
 }
 
 impl<S: Real> BlockSparseMatX<S> {
+    /// Build an empty matrix with the given block layout.
+    pub fn new(block_sizes: &[usize], block_counts: &[usize]) -> Self {
+        assert_eq!(block_sizes.len(), block_counts.len());
+        let dims: usize = block_sizes
+            .iter()
+            .zip(block_counts)
+            .map(|(s, c)| s * c)
+            .sum();
+        Self {
+            sparse: SparseMatrix::new(dims, dims),
+            block_sizes: block_sizes.to_vec(),
+            block_counts: block_counts.to_vec(),
+        }
+    }
+
+    /// Scalar offset of a type's first block.
+    fn base_offset(&self, type_index: usize) -> usize {
+        (0..type_index)
+            .map(|i| self.block_sizes[i] * self.block_counts[i])
+            .sum()
+    }
+
+    /// Resolve a global block index to `(type, local block)`.
+    fn block_type(&self, index: usize) -> (usize, usize) {
+        let mut offset = 0;
+        for (t, &count) in self.block_counts.iter().enumerate() {
+            if index < offset + count {
+                return (t, index - offset);
+            }
+            offset += count;
+        }
+        panic!("block index out of bounds");
+    }
+
+    /// Write a column-major block at block coordinates `(row, col)`.
+    ///
+    /// The lower triangle is mirrored into the stored upper triangle.
+    pub fn set_block(&mut self, row: usize, col: usize, data: &[S]) {
+        let (tr, ri) = self.block_type(row);
+        let (tc, ci) = self.block_type(col);
+        let (sr, sc) = (self.block_sizes[tr], self.block_sizes[tc]);
+        assert_eq!(data.len(), sr * sc, "block data size mismatch");
+        let row_off = self.base_offset(tr) + ri * sr;
+        let col_off = self.base_offset(tc) + ci * sc;
+        for j in 0..sc {
+            for i in 0..sr {
+                let v = data[j * sr + i];
+                self.sparse.set_coeff(row_off + i, col_off + j, v);
+                if tr != tc {
+                    self.sparse.set_coeff(col_off + j, row_off + i, v);
+                }
+            }
+        }
+    }
+
+    /// Matrix-vector product into `out`.
+    pub fn mul_vec_into(&self, x: &[S], out: &mut [S]) {
+        let values = self.sparse.mul_vec(x);
+        out.copy_from_slice(&values);
+    }
+
     /// Build from a scalar sparse matrix and a block layout.
     pub fn from_parts(
         sparse: SparseMatrix<S>,
@@ -961,6 +1022,114 @@ impl<T: BlockTypes, S: Real> HessianStorage<S> for BlockSparseMat<T, S> {
                 let sparse = SparseMatrix::from_triplets(dense.nrows(), dense.ncols(), &triplets);
                 Some(FinalCovariance::BlockSparse(BlockSparseMatX::from_parts(
                     sparse, sizes, counts,
+                )))
+            }
+        }
+    }
+}
+
+impl<S: Real> HessianStorage<S> for BlockSparseMatX<S> {
+    fn zeros(dims: usize) -> Self {
+        Self::new(&[1], &[dims])
+    }
+
+    fn zeros_like(prototype: &Self, _dims: usize) -> Self {
+        Self::new(prototype.block_sizes(), prototype.block_counts())
+    }
+
+    fn dims(&self) -> usize {
+        BlockSparseMatX::dims(self)
+    }
+
+    fn set_zero(&mut self) {
+        self.sparse.set_zero();
+    }
+
+    fn diagonal_into(&self, out: &mut [S]) {
+        let diag = self.sparse.diagonal();
+        for (o, v) in out.iter_mut().zip(diag) {
+            *o = v;
+        }
+    }
+
+    fn scale_diagonal(&mut self, factor: S) {
+        self.sparse.scale_diagonal(factor);
+    }
+
+    fn scale_by_diagonal(&mut self, scale: &[S], inverse: bool) {
+        self.sparse.scale_by_diagonal(scale, inverse);
+    }
+
+    fn apply_fixed_indices(&mut self, indices: &[usize]) {
+        self.sparse.apply_fixed_indices(indices);
+    }
+
+    fn is_all_finite(&self) -> bool {
+        self.sparse.is_all_finite()
+    }
+
+    fn mul_vec_into(&self, x: &[S], out: &mut [S]) {
+        BlockSparseMatX::mul_vec_into(self, x, out);
+    }
+
+    fn solve_into(
+        &self,
+        options: &LinearSolverOptions,
+        rhs: &[S],
+        num_reduced: usize,
+        out: &mut [S],
+    ) -> bool {
+        let mut solver = SparseLinearSolvers::<S>::new(options.clone());
+        if !solver.analyze(&self.sparse, num_reduced) || !solver.compute(&self.sparse) {
+            return false;
+        }
+        match solver.solve(&self.sparse, rhs) {
+            Some(x) => {
+                out.copy_from_slice(&x);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn to_dense(&self) -> Matrix<S, Dynamic> {
+        self.sparse.to_dense()
+    }
+
+    fn to_final_covariance(
+        &self,
+        options: &CovarianceOptions,
+        _cost: Cost,
+        _fixed: &[usize],
+        _num_reduced: usize,
+    ) -> Option<FinalCovariance> {
+        let dense = self.sparse.to_dense();
+        let inv = inverse::<S, Dynamic>(&dense)?;
+        match options.pattern {
+            CovariancePattern::FullDense => {
+                let mut out = zeros_matrix::<f32, Dynamic>(dense.nrows(), dense.ncols());
+                for j in 0..dense.ncols() {
+                    for i in 0..dense.nrows() {
+                        out.set_elem(i, j, num_traits::ToPrimitive::to_f32(&inv.elem(i, j))?);
+                    }
+                }
+                Some(FinalCovariance::Dense(out))
+            }
+            _ => {
+                let mut triplets = Vec::new();
+                for j in 0..dense.ncols() {
+                    for i in 0..dense.nrows() {
+                        let v = inv.elem(i, j);
+                        if v != S::zero() {
+                            triplets.push((i, j, num_traits::ToPrimitive::to_f32(&v)?));
+                        }
+                    }
+                }
+                let sparse = SparseMatrix::from_triplets(dense.nrows(), dense.ncols(), &triplets);
+                Some(FinalCovariance::BlockSparse(BlockSparseMatX::from_parts(
+                    sparse,
+                    self.block_sizes.clone(),
+                    self.block_counts.clone(),
                 )))
             }
         }

@@ -206,3 +206,66 @@ Alternatively return indices from `Params::fixed()`.
    scalar costs, and DogLeg when a trust region is preferable.
 4. Keep the accumulation function allocation-free: accumulate into the provided
    `grad`/`h` instead of building residual or Jacobian buffers.
+
+## 12. Sparse Hessians
+
+Use `SparseMatrix` when the normal equations are large and sparse. Accumulate
+`Jᵀr` into the gradient and `JᵀJ` into the Hessian with triplets or `coeff_ref`:
+
+```rust
+use tinyopt_rs::sparse::SparseMat;
+use tinyopt_rs::{Cost, Options, optimize_sparse};
+
+let acc = |x: &[f64], grad: Option<&mut DynGradient>, h: Option<&mut SparseMat>| -> Cost {
+    let mut cost = 0.0;
+    for i in 0..x.len() {
+        let r = x[i] - 1.0;
+        cost += r * r;
+        if let Some(g) = grad { g.set_at(i, g.at(i) + r); }
+        if let Some(h) = h { *h.coeff_ref(i, i) += 1.0; }
+    }
+    Cost::with_num_residuals(cost, x.len() as i32)
+};
+
+let mut x = vec![0.0_f64; 100];
+let summary = optimize_sparse(&mut x, acc, &Options::default());
+```
+
+Solves use a simplicial LDLᵀ with optional Schur partitioning.
+
+## 13. Schur complement and block structures
+
+Return the reduced head block from `Params::reduced`:
+
+```rust
+fn reduced(&self) -> Option<(usize, usize)> {
+    Some((0, num_cameras * 6))   // cameras first, points eliminated
+}
+```
+
+LM, GN and DogLeg then report `has_reduced()` / `num_reduced()` and solve the
+Schur complement. Block-tridiagonal and block-sparse Hessians use their own
+algorithms:
+
+```rust
+use tinyopt_rs::block_tridiag::BlockTridiagMat;
+
+let acc = |x, grad, h: Option<&mut BlockTridiagMat<6, f64>>| {
+    // h.diagonal(k).add_outer_product_self(1.0, &j_row);
+    // h.off_diagonal(k).add_outer_product(1.0, &j_k, &j_k1);
+    // ...
+};
+let summary = tinyopt_rs::optimize_tridiag::<6, _, _>(&mut x, acc, &options);
+```
+
+For compile-time block-sparse problems, declare the block types first:
+
+```rust
+tinyopt_rs::block_sparse_types!(BaTypes, [6, 3]);
+let mut opt = tinyopt_rs::optimizers::lm::Optimizer::<
+    Params, tinyopt_rs::BlockSparseMat<BaTypes, f64>>::new(options);
+opt.init_with(tinyopt_rs::BlockSparseMat::with_counts(&[num_cameras, num_points]));
+```
+
+Covariance follows the Hessian storage: `FinalCovariance::{Dense, Sparse,
+BlockTridiag, BlockSparse}`, selected with `CovarianceOptions::pattern`.
