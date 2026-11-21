@@ -103,7 +103,22 @@ fn schur_solver_matches_dense() {
     for (a, e) in x.iter().zip(&expected) {
         assert_relative_eq!(a, e, epsilon = 1e-9);
     }
-    assert!(ldlt.inverse_schur_reduced().is_some());
+    // Covariance helpers return the corresponding blocks of H⁻¹.
+    let inv = tinyopt::inverse::<f64, Dynamic>(&dense).expect("dense inverse");
+    let s_inv = ldlt.inverse_schur_reduced().expect("reduced inverse");
+    for j in 0..2 {
+        for i in 0..2 {
+            assert_relative_eq!(s_inv.elem(i, j), inv.elem(i, j), epsilon = 1e-9);
+        }
+    }
+    let m = ldlt
+        .marginal_eliminated_block(2, 3)
+        .expect("eliminated marginal");
+    for j in 0..3 {
+        for i in 0..3 {
+            assert_relative_eq!(m.elem(i, j), inv.elem(2 + i, 2 + j), epsilon = 1e-9);
+        }
+    }
 }
 
 #[test]
