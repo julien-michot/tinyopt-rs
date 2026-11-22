@@ -469,8 +469,11 @@ assert!(summary.succeeded());
 
 Compile-time block-sparse Hessians (`BlockSparseMat`) and block-tridiagonal Hessians
 (`BlockTridiagMat`) are declared with `block_sparse_types!` and use
-`optimize_block_sparse` / `optimize_tridiag`. See
-`examples/bundle_adjustment.rs`.
+`optimize_block_sparse` / `optimize_tridiag`. Any number of block sizes is
+supported (`[6, 3]`, `[6, 3, 2]`, `[6, 4, 3, 2]`, ...); see
+[docs/TUTORIAL.md](docs/TUTORIAL.md) for the Schur-split constraints. See
+`examples/bundle_adjustment.rs` and
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) for benchmarks.
 
 ```rust
 use tinyopt::backend::{DenseVector, Dynamic, Vector};

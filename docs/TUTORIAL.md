@@ -258,7 +258,10 @@ let acc = |x, grad, h: Option<&mut BlockTridiagMat<6, f64>>| {
 let summary = tinyopt::optimize_tridiag::<6, _, _>(&mut x, acc, &options);
 ```
 
-For compile-time block-sparse problems, declare the block types first:
+For compile-time block-sparse problems, declare the block types first. Any
+number of block sizes is supported (for example `[6, 3, 2]` or `[6, 4, 3, 2]`);
+the declaration order is the type order and `block_mut::<R, C>` expects the
+earlier-declared type first (the lower triangle is implicit):
 
 ```rust
 tinyopt::block_sparse_types!(BaTypes, [6, 3]);
@@ -266,6 +269,17 @@ let mut opt = tinyopt::optimizers::lm::Optimizer::<
     Params, tinyopt::BlockSparseMat<BaTypes, f64>>::new(options);
 opt.init_with(tinyopt::BlockSparseMat::with_counts(&[num_cameras, num_points]));
 ```
+
+The block Schur path (used when `Params::reduced()` returns a head block) has two
+constraints:
+
+- the split must fall on a type boundary, i.e. `num_reduced` equals the scalar
+  offset of one of the declared types;
+- the eliminated types must be mutually decoupled: same-type blocks must be
+  diagonal-only, and different eliminated types must not share coupling blocks.
+
+Otherwise the solver falls back to the scalar sparse Schur path (correct, but
+slower). Put the strongly coupled variables in the leading type(s).
 
 Covariance follows the Hessian storage: `FinalCovariance::{Dense, Sparse,
 BlockTridiag, BlockSparse}`, selected with `CovarianceOptions::pattern`.
