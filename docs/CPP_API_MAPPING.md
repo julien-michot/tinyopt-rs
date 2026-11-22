@@ -174,7 +174,7 @@ impl RobustResidualsFn for Problem {
 | `SparseMatrix<Scalar>` (Eigen CSC) | `SparseMatrix<S>` (CSC, triplets, `coeff_ref`, lower/upper completion) |
 | `Eigen::SimplicialLDLT` | `SimplicialLdl` (elimination tree + left-looking LDLᵀ) |
 | `SparseLinearSolvers` | `SparseLinearSolvers` (analyze/compute/solve, scalar Schur) |
-| `LinearSolverMethod::SuiteSparse` | CHOLMOD with the `suitesparse` feature; otherwise (or with a Schur-reduced head block) the built-in sparse LDLᵀ |
+| `LinearSolverMethod::SuiteSparse` | CHOLMOD with the `suitesparse` feature (including the Schur eliminated block); otherwise the built-in sparse LDLᵀ |
 | `LinearSolverMethod::IncompleteCholesky` | mapped to `Ldlt` |
 | `BlockTridiagMat<B>` | `BlockTridiagMat<B>` (fixed block size) |
 | `BlockTridiagMatX` | `BlockTridiagMat<0, S>` / `BlockTridiagMatX<S>` |

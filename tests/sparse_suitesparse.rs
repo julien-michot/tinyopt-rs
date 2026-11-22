@@ -94,9 +94,9 @@ fn cholmod_matches_dense_f32() {
 }
 
 #[test]
-fn cholmod_falls_back_to_ldlt_with_schur() {
-    // With a reduced head block the C++ dispatch uses the built-in sparse
-    // LDLT Schur path instead of CHOLMOD; the result must stay exact.
+fn cholmod_factors_the_schur_eliminated_block() {
+    // With a Schur partition CHOLMOD factorizes the eliminated bottom-right
+    // block (mirroring the C++ dispatch); the Schur solution must stay exact.
     let n = 8;
     let a = chain_spd::<f64>(n);
     let b: Vec<f64> = (0..n).map(|i| (i as f64) * 0.5 - 1.0).collect();

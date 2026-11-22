@@ -126,11 +126,27 @@ impl<S: Real> SparseLinearSolvers<S> {
         )
     }
 
-    /// Whether CHOLMOD handles this system (SuiteSparse method, no Schur
-    /// partition). Mirrors the C++ dispatch.
+    /// Whether CHOLMOD handles this system. Like the C++ dispatch it also
+    /// factorizes the eliminated bottom-right block of a Schur partition.
     #[cfg(feature = "suitesparse")]
-    fn uses_suitesparse(&self) -> bool {
-        matches!(self.options.method, LinearSolverMethod::SuiteSparse) && self.num_reduced == 0
+    fn uses_cholmod(&self) -> bool {
+        matches!(self.options.method, LinearSolverMethod::SuiteSparse)
+    }
+
+    /// Solve the eliminated block (full matrix when there is no Schur
+    /// partition) through the configured sparse backend.
+    fn solve_eliminated(&self, rhs: &[S]) -> Option<Vec<S>> {
+        #[cfg(feature = "suitesparse")]
+        if self.uses_cholmod() {
+            let cholmod = self.cholmod.as_ref()?;
+            let mut x = vec![S::zero(); rhs.len()];
+            return if cholmod.solve(rhs, &mut x) {
+                Some(x)
+            } else {
+                None
+            };
+        }
+        self.ldlt.solve(rhs)
     }
 
     /// Analyze the sparsity pattern of `h` with `num_reduced` head parameters.
@@ -147,12 +163,20 @@ impl<S: Real> SparseLinearSolvers<S> {
         }
         self.num_reduced = num_reduced;
         #[cfg(feature = "suitesparse")]
-        if self.uses_suitesparse() {
+        if self.uses_cholmod() {
             self.cholmod = CholmodSolver::new();
-            self.analyzed = match self.cholmod.as_mut() {
-                Some(cholmod) => cholmod.analyze(h),
+            let eliminated;
+            let target = if num_reduced > 0 {
+                eliminated = self.eliminated_block(h, num_reduced);
+                &eliminated
+            } else {
+                h
+            };
+            let analyzed = match self.cholmod.as_mut() {
+                Some(cholmod) => cholmod.analyze(target),
                 None => false,
             };
+            self.analyzed = analyzed;
             self.computed = false;
             return self.analyzed;
         }
@@ -175,17 +199,24 @@ impl<S: Real> SparseLinearSolvers<S> {
             return false;
         }
         #[cfg(feature = "suitesparse")]
-        if self.uses_suitesparse() {
+        if self.uses_cholmod() {
+            let eliminated;
+            let target = if self.num_reduced > 0 {
+                eliminated = self.eliminated_block(h, self.num_reduced);
+                &eliminated
+            } else {
+                h
+            };
             // A cloned solver starts with an empty CHOLMOD context: re-analyze
             // when the numeric factorization cannot reuse the symbolic one.
             self.computed = match self.cholmod.as_ref() {
-                Some(cholmod) => cholmod.factorize(h),
+                Some(cholmod) => cholmod.factorize(target),
                 None => false,
             };
             if !self.computed {
                 self.cholmod = CholmodSolver::new();
                 self.computed = match self.cholmod.as_mut() {
-                    Some(cholmod) => cholmod.analyze(h) && cholmod.factorize(h),
+                    Some(cholmod) => cholmod.analyze(target) && cholmod.factorize(target),
                     None => false,
                 };
             }
@@ -207,14 +238,8 @@ impl<S: Real> SparseLinearSolvers<S> {
         }
         let n = h.nrows();
         #[cfg(feature = "suitesparse")]
-        if self.uses_suitesparse() {
-            let cholmod = self.cholmod.as_ref()?;
-            let mut x = vec![S::zero(); n];
-            return if cholmod.solve(rhs, &mut x) {
-                Some(x)
-            } else {
-                None
-            };
+        if self.uses_cholmod() && self.num_reduced == 0 {
+            return self.solve_eliminated(rhs);
         }
         if self.uses_dense() {
             let dense = h.to_dense();
@@ -232,7 +257,7 @@ impl<S: Real> SparseLinearSolvers<S> {
 
         let ne = n - nr;
         // Eliminated-block solve of the tail.
-        let y = self.ldlt.solve(&rhs[nr..])?;
+        let y = self.solve_eliminated(&rhs[nr..])?;
 
         // C = H[0..nr, nr..n], C^T built once for column access.
         let c = h.submatrix(0, nr, nr, n);
@@ -249,7 +274,7 @@ impl<S: Real> SparseLinearSolvers<S> {
             for (e, v) in ct.column(col) {
                 rhs_e[e] = v;
             }
-            let w = self.ldlt.solve(&rhs_e)?;
+            let w = self.solve_eliminated(&rhs_e)?;
             let cw = c.mul_vec(&w);
             for (r, cw_r) in cw.iter().enumerate().take(nr) {
                 let value = reduced.elem(r, col) - *cw_r;
@@ -274,7 +299,7 @@ impl<S: Real> SparseLinearSolvers<S> {
             }
             ct_xr_rhs.set_at(e, acc);
         }
-        let correction = self.ldlt.solve(ct_xr_rhs.as_slice())?;
+        let correction = self.solve_eliminated(ct_xr_rhs.as_slice())?;
 
         let mut x = vec![S::zero(); n];
         for (r, xr_r) in (0..nr).map(|r| (r, xr.at(r))) {

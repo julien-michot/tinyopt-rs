@@ -45,8 +45,8 @@ tinyopt = { version = "0.8", default-features = false, features = ["faer"] }
 Enable `suitesparse` to route scalar sparse systems (`LinearSolverMethod::SuiteSparse`)
 through CHOLMOD. The build script locates the headers and library via
 `CHOLMOD_INCLUDE_DIR` / `CHOLMOD_LIB_DIR`, a conda `CONDA_PREFIX`, or the usual
-`/opt/homebrew` and `/usr/local` prefixes. Systems with a Schur-reduced head block
-keep using the built-in sparse LDLᵀ path, mirroring the C++ dispatch.
+`/opt/homebrew` and `/usr/local` prefixes. Like the C++ dispatch, CHOLMOD also
+factorizes the eliminated bottom-right block of a Schur partition.
 
 ```shell
 cargo test --features suitesparse
