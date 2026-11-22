@@ -16,7 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-BACKENDS = ("tinyopt-rs", "ceres-rs", "cpp-tinyopt")
+BACKENDS = ("tinyopt-rs", "tinyopt-rs-cholmod", "ceres-rs", "cpp-tinyopt")
 GROUP_ORDER = ("Dense static", "Dense dynamic", "Sparse")
 
 
