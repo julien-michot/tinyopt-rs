@@ -18,14 +18,21 @@ jobs:
       - run: cargo fmt --all -- --check
 
   test:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        features:
-          - "--no-default-features --features nalgebra,autodiff"
-          - "--no-default-features --features faer"
-          - "--no-default-features --features faer,autodiff"
+        include:
+          - os: ubuntu-latest
+            features: "--no-default-features --features nalgebra,autodiff"
+          - os: ubuntu-latest
+            features: "--no-default-features --features faer"
+          - os: ubuntu-latest
+            features: "--no-default-features --features faer,autodiff"
+          - os: macos-latest
+            features: "--no-default-features --features nalgebra,autodiff"
+          - os: windows-latest
+            features: "--no-default-features --features nalgebra,autodiff"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -34,9 +41,18 @@ jobs:
       - run: cargo clippy --all-targets ${{ matrix.features }} -- -D warnings
       - run: cargo test ${{ matrix.features }}
 
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - run: cargo check --all-targets --no-default-features --features nalgebra,autodiff
+
   docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
