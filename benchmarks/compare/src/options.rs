@@ -52,7 +52,8 @@ pub fn tinyopt_options(kind: &Kind) -> Options {
         }
         Kind::SparseChain { .. }
         | Kind::BundleAdjustmentBlock { .. }
-        | Kind::BundleAdjustmentSparse { .. } => {}
+        | Kind::BundleAdjustmentSparse { .. }
+        | Kind::BlockTridiag { .. } => {}
     }
     options
 }

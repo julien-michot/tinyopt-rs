@@ -3,6 +3,7 @@
 
 //! Problem definitions shared by every backend, ported from the C++ suite.
 
+pub mod block_tridiag;
 pub mod bundle_adjustment;
 pub mod dense;
 pub mod robust_pose;
@@ -23,6 +24,8 @@ pub enum Kind {
     BundleAdjustmentBlock { cams: usize, points: usize },
     /// Bundle adjustment with a scalar sparse Hessian.
     BundleAdjustmentSparse { cams: usize, points: usize },
+    /// Fixed-size block-tridiagonal pose chain.
+    BlockTridiag { blocks: usize },
     /// Robust pose with (optionally) a Huber loss.
     RobustPose { obs: usize, robust: bool },
 }
@@ -38,6 +41,7 @@ impl Kind {
             Kind::BundleAdjustmentBlock { .. } | Kind::BundleAdjustmentSparse { .. } => {
                 "Bundle adjustment"
             }
+            Kind::BlockTridiag { .. } => "Block tridiagonal",
             Kind::RobustPose { .. } => "Robust pose",
         }
     }
@@ -86,6 +90,11 @@ pub fn cases(full: bool, quick: bool) -> Vec<Case> {
             },
             "2c 200p".into(),
             "2c 200p".into(),
+        ));
+        out.push(case(
+            Kind::BlockTridiag { blocks: 32 },
+            "32x6 block tridiagonal".into(),
+            "32x6".into(),
         ));
         out.push(case(
             Kind::RobustPose {
@@ -152,6 +161,13 @@ pub fn cases(full: bool, quick: bool) -> Vec<Case> {
             Kind::BundleAdjustmentSparse { cams, points },
             format!("{cams}c {points}p sparse"),
             format!("{cams}c {points}p sparse"),
+        ));
+    }
+    for blocks in [32usize, 64, 128] {
+        out.push(case(
+            Kind::BlockTridiag { blocks },
+            format!("{blocks}x6 block tridiagonal"),
+            format!("{blocks}x6"),
         ));
     }
     if full {

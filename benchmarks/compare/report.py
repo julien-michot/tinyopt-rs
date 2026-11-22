@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 BACKENDS = ("tinyopt-rs", "tinyopt-rs-cholmod", "ceres-rs", "cpp-tinyopt")
-GROUP_ORDER = ("Dense static", "Dense dynamic", "Sparse")
+GROUP_ORDER = ("Dense static", "Dense dynamic", "Sparse", "Block tridiagonal")
 
 
 def normalize(record: dict) -> tuple[str, str, int]:
@@ -41,6 +41,11 @@ def normalize(record: dict) -> tuple[str, str, int]:
             cams, points, suffix = match.groups()
             short = f"{cams}c {points}p" + (f" {suffix.strip()}" if suffix else "")
             return ("Bundle adjustment", short, int(cams) * int(points))
+    if category == "Block tridiagonal":
+        match = re.match(r"(\d+)x(\d+)", label)
+        if match:
+            blocks, size = match.groups()
+            return ("Block tridiagonal", f"{blocks}x{size}", int(blocks))
     if category == "Robust pose":
         match = re.match(r"(\d+)\s*obs\s*(.*)", label, re.I)
         if match:
@@ -270,6 +275,7 @@ def write_markdown(data: dict, records: list[dict], iterations: list[dict], out:
         ("Dense static", "Dense static", False),
         ("Dense dynamic", "Dense dynamic", False),
         ("Sparse", "Sparse", False),
+        ("Block tridiagonal", "Block tridiagonal", False),
         ("Bundle adjustment + robust pose", "Bundle adjustment", True),
     ]
     for index, (title, category, with_category) in enumerate(groups, start=1):
@@ -314,6 +320,7 @@ def write_html(data: dict, records: list[dict], iterations: list[dict], out: Pat
         ("Dense static", "Dense static", False),
         ("Dense dynamic", "Dense dynamic", False),
         ("Sparse", "Sparse", False),
+        ("Block tridiagonal", "Block tridiagonal", False),
         ("Bundle adjustment + robust pose", "Bundle adjustment", True),
     ]
     for index, (title, category, with_category) in enumerate(groups, start=1):

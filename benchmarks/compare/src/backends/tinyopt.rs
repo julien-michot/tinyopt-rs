@@ -5,6 +5,7 @@
 
 use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
 use tinyopt::block_sparse::BlockSparseMat;
+use tinyopt::block_tridiag::BlockTridiagMat;
 use tinyopt::block_sparse_types;
 use tinyopt::optimizers::lm;
 use tinyopt::sparse::{SparseMat, SparseMatrix};
@@ -14,7 +15,9 @@ use num_traits::FromPrimitive;
 
 use crate::harness::Outcome;
 use crate::options::tinyopt_options;
-use crate::problems::{Case, Kind, bundle_adjustment as ba, dense, robust_pose as pose, sparse};
+use crate::problems::{
+    Case, Kind, block_tridiag, bundle_adjustment as ba, dense, robust_pose as pose, sparse,
+};
 
 block_sparse_types!(BaTypes, [6, 3]);
 
@@ -26,6 +29,7 @@ pub fn run(case: &Case) -> Outcome {
         Kind::SparseChain { dims } => run_sparse_chain(case, dims),
         Kind::BundleAdjustmentBlock { cams, points } => run_ba_block(case, cams, points),
         Kind::BundleAdjustmentSparse { cams, points } => run_ba_sparse(case, cams, points),
+        Kind::BlockTridiag { blocks } => run_block_tridiag(case, blocks),
         Kind::RobustPose { obs, robust } => run_pose(case, obs, robust),
     }
 }
@@ -384,6 +388,54 @@ fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
     };
 
     let summary = opt.optimize(&mut x, acc);
+    outcome(&summary)
+}
+
+
+// --- Block-tridiagonal pose chain --------------------------------------------
+
+fn run_block_tridiag(case: &Case, blocks: usize) -> Outcome {
+    const B: usize = block_tridiag::BLOCK;
+    type V = Vector<f64, Dynamic>;
+    let mut x = vec![0.0; blocks * B];
+    let acc = |xv: &[f64], grad: Option<&mut V>, h: Option<&mut BlockTridiagMat<B, f64>>| {
+        let mut cost = 0.0;
+        let mut g = grad;
+        let mut h = h;
+        for i in 0..blocks {
+            for k in 0..B {
+                let r = xv[i * B + k] - block_tridiag::target(i, k);
+                cost += r * r;
+                if let Some(g) = g.as_mut() {
+                    g.set_at(i * B + k, g.at(i * B + k) + r);
+                }
+                if let Some(h) = h.as_mut() {
+                    let mut e = [0.0; B];
+                    e[k] = 1.0;
+                    h.diagonal(i).add_outer_product_self(1.0, &e);
+                }
+            }
+        }
+        for i in 0..blocks.saturating_sub(1) {
+            for k in 0..B {
+                let r = (xv[(i + 1) * B + k] - xv[i * B + k]) - block_tridiag::delta(i, k);
+                cost += r * r;
+                if let Some(g) = g.as_mut() {
+                    g.set_at(i * B + k, g.at(i * B + k) - r);
+                    g.set_at((i + 1) * B + k, g.at((i + 1) * B + k) + r);
+                }
+                if let Some(h) = h.as_mut() {
+                    let mut e = [0.0; B];
+                    e[k] = 1.0;
+                    h.diagonal(i).add_outer_product_self(1.0, &e);
+                    h.diagonal(i + 1).add_outer_product_self(1.0, &e);
+                    h.off_diagonal(i).add_outer_product(-1.0, &e, &e);
+                }
+            }
+        }
+        Cost::with_num_residuals(0.5 * cost, (2 * blocks * B) as i32)
+    };
+    let summary = tinyopt::optimize_tridiag::<B, _, _>(&mut x, acc, &tinyopt_options(&case.kind));
     outcome(&summary)
 }
 

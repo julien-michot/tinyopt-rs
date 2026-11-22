@@ -12,7 +12,9 @@ use ceres_solver::solver::{LinearSolverType, LoggingType, SolverOptions, TrustRe
 use ceres_solver::{CostFunctionType, LossFunction, NllsProblem, ParameterBlockOrIndex};
 
 use crate::harness::Outcome;
-use crate::problems::{Case, Kind, bundle_adjustment as ba, dense, robust_pose as pose, sparse};
+use crate::problems::{
+    Case, Kind, block_tridiag, bundle_adjustment as ba, dense, robust_pose as pose, sparse,
+};
 
 fn options(linear_solver: LinearSolverType, max_invalid_steps: i32) -> SolverOptions {
     SolverOptions::builder()
@@ -49,6 +51,7 @@ pub fn run(case: &Case) -> Outcome {
         Kind::SparseChain { dims } => run_sparse_chain(dims),
         Kind::BundleAdjustmentBlock { cams, points }
         | Kind::BundleAdjustmentSparse { cams, points } => run_ba(cams, points),
+        Kind::BlockTridiag { blocks } => run_block_tridiag(blocks),
         Kind::RobustPose { obs, robust } => run_pose(obs, robust),
     }
 }
@@ -287,6 +290,79 @@ fn quaternion_rotation_jacobian(u: &[f64; 4], point: &[f64; 3]) -> [f64; 12] {
         j[row * 4 + 3] = 2.0 * w * point[row] + 2.0 * cross[row];
     }
     j
+}
+
+fn run_block_tridiag(blocks: usize) -> Outcome {
+    const B: usize = block_tridiag::BLOCK;
+    let mut problem = NllsProblem::new();
+
+    // Unary priors: r_k = x_i[k] - target(i, k). Blocks are indexed by
+    // insertion order, so pose i is `Index(i)`.
+    for i in 0..blocks {
+        let cost: CostFunctionType = Box::new(move |values, residuals, jacobians| {
+            for k in 0..B {
+                residuals[k] = values[0][k] - block_tridiag::target(i, k);
+            }
+            if let Some(jacobians) = jacobians
+                && let Some(block) = &mut jacobians[0]
+            {
+                for row in 0..B {
+                    for col in 0..B {
+                        block[row][col] = if row == col { 1.0 } else { 0.0 };
+                    }
+                }
+            }
+            true
+        });
+        problem = problem
+            .residual_block_builder()
+            .set_cost(cost, B)
+            .set_parameters([ParameterBlockOrIndex::Block(vec![0.0; B].into())])
+            .build_into_problem()
+            .expect("Ceres residual block")
+            .0;
+    }
+
+    // Relative constraints: r_k = (x_{i+1}[k] - x_i[k]) - delta(i, k).
+    for i in 0..blocks.saturating_sub(1) {
+        let cost: CostFunctionType = Box::new(move |values, residuals, jacobians| {
+            for k in 0..B {
+                residuals[k] = (values[1][k] - values[0][k]) - block_tridiag::delta(i, k);
+            }
+            if let Some(jacobians) = jacobians {
+                if let Some(block) = &mut jacobians[0] {
+                    for row in 0..B {
+                        for col in 0..B {
+                            block[row][col] = if row == col { -1.0 } else { 0.0 };
+                        }
+                    }
+                }
+                if let Some(block) = &mut jacobians[1] {
+                    for row in 0..B {
+                        for col in 0..B {
+                            block[row][col] = if row == col { 1.0 } else { 0.0 };
+                        }
+                    }
+                }
+            }
+            true
+        });
+        problem = problem
+            .residual_block_builder()
+            .set_cost(cost, B)
+            .set_parameters([
+                ParameterBlockOrIndex::Index(i),
+                ParameterBlockOrIndex::Index(i + 1),
+            ])
+            .build_into_problem()
+            .expect("Ceres residual block")
+            .0;
+    }
+
+    let solution = problem
+        .solve(&options(LinearSolverType::SPARSE_NORMAL_CHOLESKY, 10))
+        .expect("Ceres solve");
+    outcome(&solution)
 }
 
 fn run_pose(count: usize, robust: bool) -> Outcome {
