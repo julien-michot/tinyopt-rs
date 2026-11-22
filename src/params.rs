@@ -48,6 +48,74 @@ pub trait Params {
     fn reduced(&self) -> Option<(usize, usize)> {
         None
     }
+
+    /// Box bounds (`lower <= x <= upper`) applied to [`Params::as_slice`].
+    ///
+    /// Bounds assume an additive `plus_eq` (Euclidean parameters); manifold
+    /// retractions should leave this at `None`.
+    fn bounds(&self) -> Option<Bounds<Self::Scalar>> {
+        None
+    }
+}
+
+/// Simple box bounds, with `±∞` entries for unbounded coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bounds<S> {
+    /// Lower bounds (one per parameter).
+    pub lower: Vec<S>,
+    /// Upper bounds (one per parameter).
+    pub upper: Vec<S>,
+}
+
+impl<S: Real> Bounds<S> {
+    /// Bounds from explicit vectors.
+    ///
+    /// # Panics
+    /// Panics when the lengths differ or a lower bound exceeds its upper bound.
+    pub fn new(lower: Vec<S>, upper: Vec<S>) -> Self {
+        assert_eq!(lower.len(), upper.len(), "bounds length mismatch");
+        for (lo, hi) in lower.iter().zip(&upper) {
+            assert!(lo <= hi, "lower bound exceeds upper bound");
+        }
+        Self { lower, upper }
+    }
+
+    /// Bounds from explicit slices.
+    pub fn from_slices(lower: &[S], upper: &[S]) -> Self {
+        Self::new(lower.to_vec(), upper.to_vec())
+    }
+
+    /// Unbounded coordinates.
+    pub fn unbounded(dims: usize) -> Self {
+        Self {
+            lower: vec![S::neg_infinity(); dims],
+            upper: vec![S::infinity(); dims],
+        }
+    }
+
+    /// Number of bounded coordinates.
+    pub fn dims(&self) -> usize {
+        self.lower.len()
+    }
+
+    /// Clamp `value` (coordinate `index`) into the bounds.
+    pub fn clamp(&self, index: usize, value: S) -> S {
+        let lower = self.lower[index];
+        let upper = self.upper[index];
+        num_traits::Float::min(num_traits::Float::max(value, lower), upper)
+    }
+
+    /// Whether `value` sits on the lower bound of `index`.
+    pub fn at_lower(&self, index: usize, value: S) -> bool {
+        let tolerance = S::epsilon() * (S::one() + num_traits::Float::abs(self.lower[index]));
+        value <= self.lower[index] + tolerance
+    }
+
+    /// Whether `value` sits on the upper bound of `index`.
+    pub fn at_upper(&self, index: usize, value: S) -> bool {
+        let tolerance = S::epsilon() * (S::one() + num_traits::Float::abs(self.upper[index]));
+        value >= self.upper[index] - tolerance
+    }
 }
 
 /// Thin by-reference adapter around a parameter type, mirroring C++

@@ -56,7 +56,7 @@ pub use optimize::{
 pub use optimize::{optimize_cost, optimize_residuals, optimize_residuals_default};
 pub use optimizers::AccumulationFn;
 pub use options::{LineSearchMethod, Options, Ordering, Solver};
-pub use params::{Params, ParamsWrapper};
+pub use params::{Bounds, Params, ParamsWrapper};
 pub use params_pack::{PackValues, ParamsPack};
 pub use real::Real;
 pub use sparse::{SimplicialLdl, SparseLinearSolvers, SparseMat, SparseMatf, SparseMatrix};

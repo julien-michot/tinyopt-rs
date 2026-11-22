@@ -18,7 +18,7 @@ use crate::hessian::HessianStorage;
 use crate::math::{all_finite, max_abs};
 use crate::optimizers::fixed::FixedSet;
 use crate::options::{LineSearchMethod, Options};
-use crate::params::Params;
+use crate::params::{Bounds, Params};
 use crate::real::Real;
 use crate::stop_reasons::StopReason;
 use crate::summary::Summary;
@@ -188,6 +188,11 @@ where
     };
     algo.set_fixed_indices(&fixed);
 
+    let bounds = x.bounds().filter(|b| b.dims() == dims);
+    if let Some(bounds) = &bounds {
+        project_params(x, bounds);
+    }
+
     let mut cost = f.eval(P::as_slice(x), None, None);
     normalize_cost(&mut cost, &options.cost);
     if cost.num_residuals == 0 {
@@ -205,6 +210,7 @@ where
     let max_iters = options.stop.max_iters as usize;
     let mut reason = StopReason::None;
     let mut h_diag = zeros_vector::<P::Scalar, P::Dim>(dims);
+    let mut active: Vec<usize> = Vec::new();
 
     for _iter in 0..max_iters {
         let iter = sum.num_iters;
@@ -261,13 +267,31 @@ where
         cost = build;
         algo.on_build(&grad);
 
-        // Mask fixed parameters: zero gradient, zero row/column, unit diagonal.
-        for &idx in &fixed {
+        // Mask fixed parameters and variables blocked by an active bound: zero
+        // gradient, zero row/column, unit diagonal.
+        let masked: &[usize] = match &bounds {
+            Some(bounds) => {
+                active.clear();
+                active.extend_from_slice(&fixed);
+                let xs = P::as_slice(x);
+                for (index, value) in xs.iter().enumerate().take(dims.min(bounds.dims())) {
+                    let gradient = grad.at(index);
+                    let blocked = (gradient > P::Scalar::zero() && bounds.at_lower(index, *value))
+                        || (gradient < P::Scalar::zero() && bounds.at_upper(index, *value));
+                    if blocked {
+                        active.push(index);
+                    }
+                }
+                &active
+            }
+            None => &fixed,
+        };
+        for &idx in masked {
             if idx < dims {
                 grad.set_at(idx, P::Scalar::zero());
             }
         }
-        h.apply_fixed_indices(&fixed);
+        h.apply_fixed_indices(masked);
 
         // --- First-order stopping criteria ----------------------------------
         let grad_norm2 = to_f64(DenseVector::norm2(&grad));
@@ -316,6 +340,9 @@ where
 
         if options.line_search.method != LineSearchMethod::None {
             dx = line_search(x, &dx, build.cost, &grad, &f, options);
+        }
+        if let Some(bounds) = &bounds {
+            project_step::<P, P::Dim>(x, bounds, &mut dx);
         }
         algo.update_step(&dx);
 
@@ -566,6 +593,36 @@ fn scaled_step<S: Real, D: Dim>(alpha: f64, dx: &Vector<S, D>) -> Vector<S, D> {
     let a = S::from_f64(alpha).expect("step multiplier fits");
     DenseVector::scale(&mut out, a);
     out
+}
+
+/// Project the parameters into their bounds (no-op when already feasible).
+fn project_params<P: Params>(x: &mut P, bounds: &Bounds<P::Scalar>) {
+    let xs = P::as_slice(x);
+    let mut delta: Option<Vec<P::Scalar>> = None;
+    for (index, value) in xs.iter().enumerate().take(bounds.dims()) {
+        let clamped = bounds.clamp(index, *value);
+        if clamped != *value {
+            let delta = delta.get_or_insert_with(|| vec![P::Scalar::zero(); xs.len()]);
+            delta[index] = clamped - *value;
+        }
+    }
+    if let Some(delta) = delta {
+        P::plus_eq(x, &delta);
+    }
+}
+
+/// Project a step so that `x + dx` stays inside the bounds.
+fn project_step<P: Params, D: Dim>(
+    x: &P,
+    bounds: &Bounds<P::Scalar>,
+    dx: &mut Vector<P::Scalar, D>,
+) {
+    let xs = P::as_slice(x);
+    let values = DenseVector::as_mut_slice(dx);
+    for (index, value) in values.iter_mut().enumerate().take(bounds.dims()) {
+        let clamped = bounds.clamp(index, xs[index] + *value);
+        *value = clamped - xs[index];
+    }
 }
 
 /// Cost at `x + alpha * dx`, leaving `x` unchanged.
