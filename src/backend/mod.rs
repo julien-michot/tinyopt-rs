@@ -235,6 +235,15 @@ pub fn solve<S: Real, D: Dim>(
     a: &Matrix<S, D>,
     b: &Vector<S, D>,
 ) -> Option<Vector<S, D>> {
+    // Closed-form small systems (mirrors the C++ DenseLinearSolvers fast path).
+    if matches!(method, LinearSolverMethod::Ldlt | LinearSolverMethod::Llt) {
+        let n = a.nrows();
+        if n == a.ncols() && (1..=4).contains(&n) {
+            if let Some(x) = crate::math::solve_small_dense_system::<S, D>(a, b) {
+                return Some(x);
+            }
+        }
+    }
     match method {
         LinearSolverMethod::Ldlt => D::solve_ldlt(a, b),
         LinearSolverMethod::Llt => D::solve_llt(a, b),
