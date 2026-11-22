@@ -1,65 +1,13 @@
 // Copyright 2026 Julien Michot.
 // SPDX-License-Identifier: Apache-2.0
 
-//! # tinyopt
-//!
-//! A lightweight, Rust native optimization library for unconstrained
-//! optimization and non-linear least squares (NLLS), focused on dense systems.
-//!
-//! This crate is the Rust counterpart of the C++ [tinyopt](https://github.com/julienmichot/tinyopt)
-//! library (version parity: **0.8.0**). It follows the same *accumulation pattern*:
-//! users accumulate the gradient `Jᵀr` and Hessian approximation `JᵀJ` directly into
-//! the linear system, avoiding large residual/Jacobian buffers.
-//!
-//! ## Backends
-//!
-//! Exactly one linear-algebra backend must be enabled:
-//!
-//! - `nalgebra` (default): static (`SVector`/`SMatrix`) and dynamic (`DVector`/`DMatrix`) sizes.
-//! - `faer`: dynamic sizes (`Col`/`Mat`); static-sized problems use the dynamic types.
-//!
-//! ## Differentiation
-//!
-//! - `autodiff` (default): forward-mode automatic differentiation using
-//!   [`num-dual`](https://docs.rs/num-dual) `DualVec`, the Rust equivalent of
-//!   tinyopt's `Jet` (Ceres-style dual numbers).
-//! - `numdiff`: central finite differences.
-//!
-//! ## Example
-//!
-//! ```no_run
-//! use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
-//! use tinyopt::{Cost, Options, Static, optimize};
-//!
-//! type Vec2 = Vector<f64, Static<2>>;
-//! type Mat2 = Matrix<f64, Static<2>>;
-//!
-//! // Minimize (x0² - 2)² + (x0*x1 - 3)² with a manual accumulation function.
-//! let acc = |x: &[f64], grad: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
-//!     let r0 = x[0] * x[0] - 2.0;
-//!     let r1 = x[0] * x[1] - 3.0;
-//!     if let Some(g) = grad {
-//!         g.set_at(0, 2.0 * x[0] * r0 + x[1] * r1);
-//!         g.set_at(1, x[0] * r1);
-//!     }
-//!     if let Some(h) = h {
-//!         let h00 = 4.0 * x[0] * x[0] + x[1] * x[1];
-//!         let h01 = 2.0 * x[0] * x[1] + x[0] * x[1];
-//!         h.set_elem(0, 0, h00);
-//!         h.set_elem(0, 1, h01);
-//!         h.set_elem(1, 0, h01);
-//!         h.set_elem(1, 1, x[0] * x[0]);
-//!     }
-//!     Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
-//! };
-//!
-//! let mut x = <Vec2 as tinyopt::backend::DenseVector<f64>>::zeros(2);
-//! x.set_at(0, 1.0);
-//! x.set_at(1, 1.0);
-//! let summary = optimize(&mut x, acc, &Options::default());
-//! assert!(summary.succeeded());
-//! ```
-
+// The README examples use the autodiff API, so the full documentation is only
+// included when that feature is available (docs.rs builds with defaults).
+#![cfg_attr(feature = "autodiff", doc = include_str!("../README.md"))]
+#![cfg_attr(
+    not(feature = "autodiff"),
+    doc = "Rust native optimization and non-linear least squares.\n\nThis build has the `autodiff` feature disabled; see the README for examples."
+)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 #[cfg(all(feature = "nalgebra", feature = "faer"))]

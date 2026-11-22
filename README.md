@@ -1,54 +1,83 @@
 # tinyopt
 
 A lightweight, Rust native optimization library for unconstrained optimization and
-non-linear least squares on **dense** systems — the Rust counterpart of
-[C++ tinyopt](https://github.com/julienmichot/tinyopt), at version parity **0.8.0**.
+non-linear least squares, with **dense**, **sparse**, **block-tridiagonal** and
+**block-sparse** Hessians. It is the Rust counterpart of
+[C++ tinyopt](https://github.com/julienmichot/tinyopt) (version parity **0.8.0**) and
+follows the same *accumulation pattern*: you accumulate the gradient `Jᵀr` and the
+Hessian approximation `JᵀJ` directly into the linear system, without materializing
+residual or Jacobian buffers.
 
-The library follows the same *accumulation pattern* as the C++ implementation: users
-accumulate the gradient `Jᵀr` and Hessian approximation `JᵀJ` directly into the linear
-system instead of materializing residual and Jacobian buffers.
+- Solvers: Levenberg-Marquardt (default), Gauss-Newton, Dog-Leg, gradient descent,
+  conjugate gradient, BFGS and L-BFGS, with optional line search.
+- Differentiation: forward-mode autodiff (`num-dual`), numerical differentiation and
+  analytical derivatives through the accumulation functions.
+- Fixed parameters, Schur complement (reduced parameters), covariance export, robust
+  losses, custom parameter types and manifold retractions.
+- Backends: [`nalgebra`](https://crates.io/crates/nalgebra) (static + dynamic) or
+  [`faer`](https://crates.io/crates/faer) (dynamic).
 
-## Backends
+## Installation
 
-Exactly one linear-algebra backend is compiled per build:
-
-| Feature | Sizes | Types |
-|---|---|---|
-| `nalgebra` (default) | static + dynamic | `SVector`/`SMatrix`, `DVector`/`DMatrix` |
-| `faer` | dynamic | `Col`/`Mat` |
-
-```shell
-cargo test                                              # nalgebra + autodiff
-cargo test --no-default-features --features faer        # faer backend
-cargo test --no-default-features --features faer,autodiff
+```toml
+[dependencies]
+tinyopt = "0.8"
 ```
 
-## Differentiation
+Default features are `nalgebra` + `autodiff`. Exactly one backend must be enabled.
 
-- `autodiff` (default): forward-mode AD through
-  [`num-dual`](https://docs.rs/num-dual). `DualVec<T, D>` is the Rust equivalent of
-  tinyopt's `Jet<T, N>`. Accumulation is direct (`Jᵀr` / `JᵀJ` per residual) and the
-  static-dimension path uses stack-allocated dual numbers.
-- `numdiff`: forward, central, and fast-central finite differences.
+| Feature | Default | Purpose |
+|---|---|---|
+| `nalgebra` | yes | static (`SVector`/`SMatrix`) and dynamic (`DVector`/`DMatrix`) sizes |
+| `faer` | no | dynamic sizes (`Col`/`Mat`); use with `default-features = false` |
+| `autodiff` | yes | forward-mode AD through `num-dual` (requires `nalgebra`) |
+| `numdiff` | no | central finite differences |
+| `solver-llt`, `solver-lu`, `solver-qr`, `solver-svd` | no | extra dense factorization methods |
 
-User functions are generic over the scalar, so a single implementation serves both
-plain evaluation and autodiff:
+```toml
+# faer backend without autodiff
+tinyopt = { version = "0.8", default-features = false, features = ["faer"] }
+```
+
+## Quick start: manual accumulation
+
+The fastest path: one closure that returns the cost and, when requested, writes the
+gradient and Hessian. Here we minimize `(x0 - 1)² + 10 (x1 + 2)²`:
 
 ```rust
-use tinyopt::diff::{DualNum, ResidualsFn};
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Static, optimize};
 
-struct Sqrt2;
+type Vec2 = Vector<f64, Static<2>>;
+type Mat2 = Matrix<f64, Static<2>>;
 
-impl ResidualsFn for Sqrt2 {
-    type Scalar = f64;
-
-    fn eval<T: DualNum<Primitive = f64>>(&self, x: &[T]) -> Vec<T> {
-        vec![x[0] * x[0] - T::from_re(2.0)]
+let acc = |x: &[f64], grad: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
+    let (r0, r1) = (x[0] - 1.0, x[1] + 2.0);
+    if let Some(g) = grad {
+        g.set_at(0, 2.0 * r0);
+        g.set_at(1, 20.0 * r1);
     }
-}
+    if let Some(h) = h {
+        h.set_elem(0, 0, 2.0);
+        h.set_elem(1, 1, 20.0);
+    }
+    Cost::with_num_residuals(r0 * r0 + 10.0 * r1 * r1, 2)
+};
+
+let mut x = <Vec2 as DenseVector<f64>>::zeros(2);
+let summary = optimize(&mut x, acc, &Options::default());
+assert!(summary.succeeded());
+assert!((x.at(0) - 1.0).abs() < 1e-6);
+assert!((x.at(1) + 2.0).abs() < 1e-6);
 ```
 
-## Quick start
+`grad` and `h` are `Option`s: the same closure also serves cost-only evaluations
+(e.g. trial steps in the line search), so keep the `if let` guards.
+
+## Quick start: autodiff residuals
+
+For residual vectors, implement `ResidualsFn` once with a generic scalar; the
+optimizer computes `Jᵀr` and `JᵀJ` with forward-mode autodiff:
 
 ```rust
 use tinyopt::backend::{DenseVector, Vector};
@@ -70,136 +99,450 @@ let mut x = <Vector<f64, Static<1>> as DenseVector<f64>>::zeros(1);
 x.set_at(0, 1.0);
 let summary = optimize_residuals(&mut x, &Sqrt2, &Options::default());
 assert!(summary.converged());
+assert!((x.at(0) - 2.0_f64.sqrt()).abs() < 1e-6);
 ```
 
-## Status
+`optimize_residuals` uses the default options; use `optimize_cost` for a scalar cost
+function, or `optimize_robust_residuals` for per-residual losses.
 
-| Milestone | Scope | Status |
+## Choosing a solver
+
+```rust
+use tinyopt::{Options, Solver};
+
+// Levenberg-Marquardt is the default.
+let options = Options::new(Solver::GaussNewton);
+```
+
+| `Solver` | Module | Notes |
 |---|---|---|
-| M0 | scaffold, backend abstraction, params, num-dual autodiff | ✅ |
-| M1 | Cost/Summary/Options, LM/GN, numdiff, gradient checks | ✅ |
-| M2 | GD/CG/BFGS/L-BFGS/DogLeg, line search, losses, distances | ✅ |
-| M3 | direct autodiff accumulation, robust blocks, AD type coverage | ✅ |
-| M4 | fixed params, covariance, multi-params, manifolds | ✅ |
-| M5 | examples, benchmarks, docs parity | ✅ |
-| M6 | sparse, block-tridiagonal and block-sparse systems | ✅ |
+| `LevenbergMarquardt` (default) | `optimizers::lm` | damped NLLS, adaptive `λ` |
+| `GaussNewton` | `optimizers::gn` | no damping |
+| `DogLeg` | `optimizers::dl` | trust region |
+| `GradientDescent` | `optimizers::gd` | first order, learning rate |
+| `ConjugateGradient` | `optimizers::cg` | first order |
+| `Bfgs` | `optimizers::bfgs` | quasi-Newton |
+| `Lbfgs` | `optimizers::lbfgs` | limited-memory quasi-Newton |
 
-## Losses and distances
-
-```rust
-use tinyopt::losses::{huber, huber_loss, cauchy_loss, maha_whitened_cov};
-use tinyopt::distances::{euclidean, euclidean_with_jac};
-```
-
-Classical norms (`squared_l2`, `l2`, `l1`, `linf`), robust M-estimators
-(`huber`, `tukey`, `arctan`, `cauchy`, `geman_mcclure`, `blake_zisserman`,
-`truncated`) with optional Jacobian scales, Mahalanobis norms/whitening,
-activations, softmax and vector distances are all available.
-
-## Fixed parameters, covariance and multiple parameters
+`solver_type` also selects the algorithm in the free functions
+(`optimize`, `optimize_sparse`, ...). Use an optimizer object to reuse buffers,
+change options between runs, or export the covariance:
 
 ```rust
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
 use tinyopt::optimizers::lm;
-use tinyopt::{CovarianceOptions, Options};
+use tinyopt::{Cost, CovarianceOptions, Options, Static};
 
-let mut opt = lm::Optimizer::<Vec2>::new(Options::default());
-opt.fix(&[1]);                       // hold parameter 1 fixed
-let summary = opt.optimize(&mut x, acc);
-let cov = opt.covariance_with(&CovarianceOptions::default());
+type Vec2 = Vector<f64, Static<2>>;
+type Mat2 = Matrix<f64, Static<2>>;
+
+let acc = |x: &[f64], g: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
+    let (r0, r1) = (x[0] - 1.0, x[1] + 2.0);
+    if let Some(g) = g {
+        g.set_at(0, 2.0 * r0);
+        g.set_at(1, 2.0 * r1);
+    }
+    if let Some(h) = h {
+        h.set_elem(0, 0, 2.0);
+        h.set_elem(1, 1, 2.0);
+    }
+    Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
+};
+
+let mut optimizer = lm::Optimizer::<Vec2, Mat2>::new(Options::default());
+let mut x = <Vec2 as DenseVector<f64>>::zeros(2);
+let summary = optimizer.optimize(&mut x, acc);
+assert!(summary.succeeded());
+
+// The optimizer keeps its allocations and can be reused.
+let summary = optimizer.optimize(&mut x, acc);
+assert!(summary.succeeded());
+
+// Posterior covariance from the final (undamped) Hessian.
+let cov = optimizer.covariance_with(&CovarianceOptions::default());
+assert!(cov.is_some());
 ```
 
-`optimize2` / `optimize3` run several parameters together (packed internally and
-written back once), and `ParamsWrapper` adapts manifold-style parameter types.
+## Fixed parameters (fixed dimensions)
+
+Hold parameters fixed either on the optimizer (indices) or on the parameter type
+(`Params::fixed`). Fixed rows/columns are masked out and their diagonal is set to one,
+so they never move:
+
+```rust
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::optimizers::lm;
+use tinyopt::{Cost, Options, Static};
+
+type Vec2 = Vector<f64, Static<2>>;
+type Mat2 = Matrix<f64, Static<2>>;
+
+let acc = |x: &[f64], g: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
+    let (r0, r1) = (x[0] - 1.0, x[1] - 2.0);
+    if let Some(g) = g {
+        g.set_at(0, 2.0 * r0);
+        g.set_at(1, 2.0 * r1);
+    }
+    if let Some(h) = h {
+        h.set_elem(0, 0, 2.0);
+        h.set_elem(1, 1, 2.0);
+    }
+    Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
+};
+
+let mut optimizer = lm::Optimizer::<Vec2, Mat2>::new(Options::default());
+optimizer.fix(&[1]); // keep x1 fixed
+let mut x = <Vec2 as DenseVector<f64>>::zeros(2);
+let summary = optimizer.optimize(&mut x, acc);
+assert!(summary.succeeded());
+assert!((x.at(0) - 1.0).abs() < 1e-6);
+assert_eq!(x.at(1), 0.0); // unchanged
+```
+
+From the parameter type, return the indices in `Params::fixed` (do not also call
+`Optimizer::fix`, the optimizer warns and uses the explicit indices):
+
+```rust
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Params, Static, optimize};
+
+#[derive(Clone, Debug)]
+struct Rectangle {
+    size: [f64; 2],
+}
+
+impl Params for Rectangle {
+    type Scalar = f64;
+    type Dim = Static<2>;
+
+    fn dims(&self) -> usize {
+        2
+    }
+    fn as_slice(&self) -> &[f64] {
+        &self.size
+    }
+    fn plus_eq(&mut self, delta: &[f64]) {
+        self.size[0] += delta[0];
+        self.size[1] += delta[1];
+    }
+    fn norm2(&self) -> f64 {
+        self.size.iter().map(|v| v * v).sum()
+    }
+    // Height stays fixed at its initial value.
+    fn fixed(&self) -> Option<Vec<usize>> {
+        Some(vec![1])
+    }
+}
+
+type Vec2 = Vector<f64, Static<2>>;
+type Mat2 = Matrix<f64, Static<2>>;
+
+let acc = |x: &[f64], g: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
+    let (r0, r1) = (x[0] - 3.0, x[1] - 4.0);
+    if let Some(g) = g {
+        g.set_at(0, 2.0 * r0);
+        g.set_at(1, 2.0 * r1);
+    }
+    if let Some(h) = h {
+        h.set_elem(0, 0, 2.0);
+        h.set_elem(1, 1, 2.0);
+    }
+    Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
+};
+
+let mut rect = Rectangle { size: [1.0, 1.0] };
+let summary = optimize(&mut rect, acc, &Options::default());
+assert!(summary.succeeded());
+assert!((rect.size[0] - 3.0).abs() < 1e-6);
+assert_eq!(rect.size[1], 1.0); // fixed by the parameter type
+```
+
+## Custom parameter types
+
+Any type implementing `Params` can be optimized: expose the scalar count, a flat
+slice for evaluation, the tangent update `plus_eq`, and the squared norm used by the
+relative step criterion.
+
+```rust
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Params, Static, optimize};
+
+#[derive(Clone, Debug)]
+struct Rectangle {
+    size: [f64; 2],
+}
+
+impl Params for Rectangle {
+    type Scalar = f64;
+    type Dim = Static<2>;
+
+    fn dims(&self) -> usize {
+        2
+    }
+    fn as_slice(&self) -> &[f64] {
+        &self.size
+    }
+    fn plus_eq(&mut self, delta: &[f64]) {
+        self.size[0] += delta[0];
+        self.size[1] += delta[1];
+    }
+    fn norm2(&self) -> f64 {
+        self.size.iter().map(|v| v * v).sum()
+    }
+}
+
+type Vec2 = Vector<f64, Static<2>>;
+type Mat2 = Matrix<f64, Static<2>>;
+
+let acc = |x: &[f64], g: Option<&mut Vec2>, h: Option<&mut Mat2>| -> Cost {
+    let (r0, r1) = (x[0] - 3.0, x[1] - 4.0);
+    if let Some(g) = g {
+        g.set_at(0, 2.0 * r0);
+        g.set_at(1, 2.0 * r1);
+    }
+    if let Some(h) = h {
+        h.set_elem(0, 0, 2.0);
+        h.set_elem(1, 1, 2.0);
+    }
+    Cost::with_num_residuals(r0 * r0 + r1 * r1, 2)
+};
+
+let mut rect = Rectangle { size: [0.0, 0.0] };
+let summary = optimize(&mut rect, acc, &Options::default());
+assert!(summary.succeeded());
+assert!((rect.size[0] - 3.0).abs() < 1e-6);
+assert!((rect.size[1] - 4.0).abs() < 1e-6);
+```
+
+### Manifold parameters
+
+Put the retraction in `plus_eq` (here a 2D pose with a wrapped angle) and wrap the
+value when the storage must stay at the call site:
+
+```rust
+use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
+use tinyopt::{Cost, Options, Params, ParamsWrapper, Static, optimize};
+
+#[derive(Clone, Debug)]
+struct Pose2 {
+    data: [f64; 3], // x, y, theta
+}
+
+impl Params for Pose2 {
+    type Scalar = f64;
+    type Dim = Static<3>;
+
+    fn dims(&self) -> usize {
+        3
+    }
+    fn as_slice(&self) -> &[f64] {
+        &self.data
+    }
+    fn plus_eq(&mut self, delta: &[f64]) {
+        self.data[0] += delta[0];
+        self.data[1] += delta[1];
+        self.data[2] = (self.data[2] + delta[2] + std::f64::consts::PI)
+            .rem_euclid(2.0 * std::f64::consts::PI)
+            - std::f64::consts::PI;
+    }
+    fn norm2(&self) -> f64 {
+        self.data.iter().map(|v| v * v).sum()
+    }
+}
+
+type Vec3 = Vector<f64, Static<3>>;
+type Mat3 = Matrix<f64, Static<3>>;
+
+let acc = |x: &[f64], mut g: Option<&mut Vec3>, mut h: Option<&mut Mat3>| -> Cost {
+    let target = [1.0, -2.0, 0.5];
+    let mut cost = 0.0;
+    for i in 0..3 {
+        let r = x[i] - target[i];
+        cost += r * r;
+        if let Some(g) = g.as_mut() {
+            g.set_at(i, 2.0 * r);
+        }
+        if let Some(h) = h.as_mut() {
+            h.set_elem(i, i, 2.0);
+        }
+    }
+    Cost::with_num_residuals(cost, 3)
+};
+
+let mut wrapped = ParamsWrapper::new(Pose2 { data: [0.0, 0.0, 0.0] });
+let summary = optimize(&mut wrapped, acc, &Options::default());
+assert!(summary.succeeded());
+assert!((wrapped.data[0] - 1.0).abs() < 1e-6);
+```
+
+## Several parameters at once
+
+`optimize2` / `optimize3` pack several parameter values, run one optimization, and
+write them back:
+
+```rust
+use tinyopt::backend::{DenseMatrix, DenseVector};
+use tinyopt::{Cost, DynGradient, DynHessian, Options, optimize2};
+
+let mut a = 0.0_f64;
+let mut b = 0.0_f64;
+let summary = optimize2(
+    &mut a,
+    &mut b,
+    |av: &[f64], bv: &[f64], g: Option<&mut DynGradient>, h: Option<&mut DynHessian>| {
+        let (ra, rb) = (av[0] - 1.0, bv[0] + 2.0);
+        if let Some(g) = g {
+            g.set_at(0, 2.0 * ra);
+            g.set_at(1, 2.0 * rb);
+        }
+        if let Some(h) = h {
+            h.set_elem(0, 0, 2.0);
+            h.set_elem(1, 1, 2.0);
+        }
+        Cost::with_num_residuals(ra * ra + rb * rb, 2)
+    },
+    &Options::default(),
+);
+assert!(summary.succeeded());
+assert!((a - 1.0).abs() < 1e-6);
+assert!((b + 2.0).abs() < 1e-6);
+```
 
 ## Sparse and block-structured problems
 
-Scalar sparse Hessians, block-tridiagonal Hessians and compile-time block-sparse
-Hessians share the same optimizer API:
+A scalar sparse Hessian (`SparseMat`) uses the same accumulation API; only the
+`Option<&mut H>` type changes:
 
 ```rust
+use tinyopt::backend::{DenseVector, Dynamic, Vector};
 use tinyopt::sparse::SparseMat;
-use tinyopt::{Options, optimize_sparse};
+use tinyopt::{Cost, Options, optimize_sparse};
 
-let mut x = vec![0.0_f64; 5];
-let summary = optimize_sparse(&mut x, |x, grad, h| {
-    // grad: Option<&mut Vector<f64, Dynamic>>
-    // h:    Option<&mut SparseMat> (triplets or coeff_ref)
-    tinyopt::Cost::with_num_residuals(0.0, 1)
-}, &Options::default());
+let mut x = vec![0.0_f64; 4];
+let summary = optimize_sparse(
+    &mut x,
+    |xv: &[f64], mut g: Option<&mut Vector<f64, Dynamic>>, mut h: Option<&mut SparseMat>| {
+        let mut cost = 0.0;
+        for i in 0..4 {
+            let r = xv[i] - 1.0;
+            cost += r * r;
+            if let Some(g) = g.as_mut() {
+                g.set_at(i, g.at(i) + r);
+            }
+            if let Some(h) = h.as_mut() {
+                *h.coeff_ref(i, i) += 1.0;
+            }
+            if i + 1 < 4 {
+                let r = xv[i + 1] - xv[i];
+                cost += r * r;
+                if let Some(g) = g.as_mut() {
+                    g.set_at(i, g.at(i) - r);
+                    g.set_at(i + 1, g.at(i + 1) + r);
+                }
+                if let Some(h) = h.as_mut() {
+                    *h.coeff_ref(i, i) += 1.0;
+                    *h.coeff_ref(i + 1, i + 1) += 1.0;
+                    *h.coeff_ref(i, i + 1) -= 1.0;
+                    *h.coeff_ref(i + 1, i) -= 1.0;
+                }
+            }
+        }
+        Cost::with_num_residuals(cost, 7)
+    },
+    &Options::default(),
+);
+assert!(summary.succeeded());
 ```
 
-- `SparseMatrix<S>` (CSC) with triplet assembly, `coeff_ref`, symmetric
-  completion and a simplicial LDLᵀ (`SimplicialLdl`) with a native
-  minimum-degree (AMD-style) fill-reducing ordering
-  (`options.linear.ordering`, default `Ordering::Amd`; `Ordering::Natural`
-  disables it), including the scalar Schur complement path.
-- `BlockTridiagMat<B>` (fixed block size) and `BlockTridiagMatX<S>` (dynamic) with
-  block Thomas/Takahashi factorization (`BlockTridiagLdlt`).
-- `block_sparse_types!` + `BlockSparseMat<T, S>` with compile-time block-pair
-  checks and a block Schur solver (`BlockSparseLdlt`): independent eliminated
-  blocks are inverted and eliminated with dense per-block operations
-  (`S = H_rr − Σ C E⁻¹ Cᵀ`); other layouts use the scalar sparse Schur.
-  `BlockSparseMatX<S>` covers runtime layouts.
-- `Params::reduced()` selects the Schur reduced head block
-  (`has_reduced`/`num_reduced` on LM, GN and DogLeg).
+Compile-time block-sparse Hessians (`BlockSparseMat`) and block-tridiagonal Hessians
+(`BlockTridiagMat`) are declared with `block_sparse_types!` and use
+`optimize_block_sparse` / `optimize_tridiag`. See
+`examples/bundle_adjustment.rs`.
 
-## Cross-library benchmarks
+```rust
+use tinyopt::backend::{DenseVector, Dynamic, Vector};
+use tinyopt::block_sparse::BlockSparseMat;
+use tinyopt::{Cost, Options, optimize_block_sparse};
 
-`benchmarks/compare` compares tinyopt-rs with Ceres (Rust binding) and the C++
-tinyopt binary on the same problems and renders plots plus an HTML/Markdown
-report:
+mod scene {
+    tinyopt::block_sparse_types!(BaTypes, [6, 3]); // camera 6, point 3
+}
 
-```sh
-pixi run bench-quick     # build + run the short suite
-pixi run bench-compare   # full suite (all sizes except 100c/50kp)
-pixi run bench-report    # HTML report under benchmarks/compare/results/report
+let mut x = vec![0.0_f64; 9]; // 1 camera + 1 point
+let summary = optimize_block_sparse::<scene::BaTypes, _, _>(
+    &mut x,
+    |xv: &[f64], mut g: Option<&mut Vector<f64, Dynamic>>, mut h: Option<&mut BlockSparseMat<scene::BaTypes>>| {
+        let mut cost = 0.0;
+        for i in 0..9 {
+            let r = xv[i] - 1.0;
+            cost += r * r;
+            if let Some(g) = g.as_mut() {
+                g.set_at(i, g.at(i) + r);
+            }
+        }
+        if let Some(h) = h.as_mut() {
+            for i in 0..6 {
+                let mut e = [0.0; 6];
+                e[i] = 1.0;
+                h.block_mut::<6, 6>(0, 0).add_outer_product_self(1.0, &e);
+            }
+            for i in 0..3 {
+                let mut e = [0.0; 3];
+                e[i] = 1.0;
+                h.block_mut::<3, 3>(0, 0).add_outer_product_self(1.0, &e);
+            }
+        }
+        Cost::with_num_residuals(cost, 9)
+    },
+    &Options::default(),
+);
+assert!(summary.succeeded());
 ```
 
-Ceres is built from its vendored sources (`ceres-solver` crate, `source`
-feature). The C++ backend runs `tinyopt_bench_tinyopt` from the C++ checkout
-(`cd ../exp-mop && pixi run build-bench`) when available.
+For a reduced head block (Schur complement), implement `Params::reduced()`
+returning `Some((0, count))`; both scalar sparse and block-sparse solvers then
+eliminate the tail.
+
+## Robust losses
+
+Losses are plain functions over a squared norm, with optional Jacobian scales:
+
+```rust
+use tinyopt::losses::{huber, huber_with_scale};
+
+let squared_norm = 0.25;
+let threshold2 = 0.1;
+let cost = huber(squared_norm, threshold2);
+let (_loss, scale) = huber_with_scale(squared_norm, threshold2);
+assert!(cost > 0.0);
+assert!(scale > 0.0 && scale <= 1.0);
+```
+
+Classical norms (`squared_l2`, `l2`, `l1`, `linf`), robust M-estimators (`huber`,
+`tukey`, `arctan`, `cauchy`, `geman_mcclure`, `blake_zisserman`, `truncated`),
+Mahalanobis whitening, activations and distances are available under `tinyopt::losses`
+and `tinyopt::distances`.
 
 ## Examples and benchmarks
 
-The seven dense C++ examples are ported one-to-one:
+Runnable examples live in `examples/`:
 
 ```shell
 cargo run --example astronomy
-cargo run --example biology
-cargo run --example computer_vision
-cargo run --example finance
-cargo run --example physics
-cargo run --example robotics
-cargo run --example signal_processing
-cargo run --example bundle_adjustment        # sparse Hessian + Schur
+cargo run --example bundle_adjustment
 
 ```
 
-Benchmarks mirror the C++ dense suites (f64/f32, static/dynamic, prior and
-1D/2D/6D profiling workloads):
+Criterion benchmarks:
 
 ```shell
 cargo bench --bench dense
 cargo bench --bench sparse
 ```
 
-## Documentation
-
-- [`docs/TUTORIAL.md`](docs/TUTORIAL.md) – dense tutorial (mirrors the C++ one).
-- [`docs/CPP_API_MAPPING.md`](docs/CPP_API_MAPPING.md) – C++ → Rust API map.
-- `cargo doc --no-deps --open` – rustdoc reference.
-
-## Development
-
-The Rust toolchain is managed with [pixi](https://pixi.prefix.dev/):
-
-```shell
-pixi run build
-pixi run test
-pixi run fmt
-pixi run clippy
-```
+Cross-library benchmarks (tinyopt-rs vs Ceres vs the C++ tinyopt binary) live in
+`benchmarks/compare` and produce an HTML/Markdown report.
 
 ## License
 
-Apache-2.0
+Apache-2.0. See the `LICENSE` file in the repository.

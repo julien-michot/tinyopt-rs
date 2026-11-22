@@ -7,9 +7,11 @@ description = "A lightweight, Rust native optimization library (dense, sparse an
 authors = ["Julien Michot"]
 license = "Apache-2.0"
 repository = "https://github.com/julienmichot/tinyopt-rs"
+documentation = "https://docs.rs/tinyopt"
 readme = "README.md"
 keywords = ["optimization", "least-squares", "autodiff", "nonlinear"]
 categories = ["science", "mathematics"]
+exclude = ["/AGENTS.md", "/pixi.toml", "/pixi.lock", "/.github", "/docs"]
 
 [lib]
 name = "tinyopt"
