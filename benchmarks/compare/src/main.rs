@@ -31,6 +31,7 @@ struct Args {
     backends: Vec<String>,
     cpp_bench: PathBuf,
     filter: Option<String>,
+    exclude: Option<String>,
 }
 
 impl Default for Args {
@@ -46,6 +47,7 @@ impl Default for Args {
             cpp_bench: manifest
                 .join("../../../exp-mop/build-bench/benchmarks/tinyopt/tinyopt_bench_tinyopt"),
             filter: None,
+            exclude: None,
         }
     }
 }
@@ -106,6 +108,10 @@ fn parse_args(argv: Vec<String>) -> Args {
                 i += 1;
                 args.filter = Some(argv.get(i).expect("--filter needs a value").clone());
             }
+            "--exclude" => {
+                i += 1;
+                args.exclude = Some(argv.get(i).expect("--exclude needs a value").clone());
+            }
             other => {
                 eprintln!("unknown option: {other}");
                 std::process::exit(2);
@@ -120,6 +126,9 @@ fn selected_cases(args: &Args) -> Vec<problems::Case> {
     let mut cases = problems::cases(args.full, args.quick);
     if let Some(filter) = &args.filter {
         cases.retain(|case| case.name.contains(filter.as_str()));
+    }
+    if let Some(exclude) = &args.exclude {
+        cases.retain(|case| !case.name.contains(exclude.as_str()));
     }
     cases
 }

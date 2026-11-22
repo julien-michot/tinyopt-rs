@@ -228,7 +228,13 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         if indices.is_empty() {
             return;
         }
-        let is_fixed = |i: usize| indices.binary_search(&i).is_ok();
+        let dims = self.dims();
+        let mut is_fixed = vec![false; dims];
+        for &i in indices {
+            if i < dims {
+                is_fixed[i] = true;
+            }
+        }
         let mut offsets = Vec::with_capacity(Self::num_types());
         let mut off = 0;
         for t in 0..Self::num_types() {
@@ -250,10 +256,10 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                             let gi = row_base + i;
                             let gj = col_base + j;
                             if a == b && r == c && i == j {
-                                if is_fixed(gi) {
+                                if is_fixed[gi] {
                                     block[j * ra + i] = S::one();
                                 }
-                            } else if is_fixed(gi) || is_fixed(gj) {
+                            } else if is_fixed[gi] || is_fixed[gj] {
                                 block[j * ra + i] = S::zero();
                             }
                         }
@@ -709,26 +715,62 @@ impl<S: Real> BlockSparseMatX<S> {
 
 // --- Block LDLT with Schur complement ---------------------------------------
 
-/// Dense inverse of a small column-major block.
-fn inverse_block<S: Real>(block: &[S], size: usize) -> Option<Vec<S>> {
-    let mut m = zeros_matrix::<S, Dynamic>(size, size);
+/// Dense inverse of a small column-major block (allocates nothing).
+fn inverse_block<S: Real>(block: &[S], size: usize, out: &mut [S]) -> bool {
+    const MAX: usize = 8;
+    if size > MAX || out.len() != size * size {
+        return false;
+    }
+    let mut a = [[S::zero(); MAX]; MAX];
+    let mut inv = [[S::zero(); MAX]; MAX];
     for j in 0..size {
         for i in 0..size {
-            m.set_elem(i, j, block[j * size + i]);
+            a[i][j] = block[j * size + i];
+            inv[i][j] = if i == j { S::one() } else { S::zero() };
         }
     }
-    let inv = crate::backend::inverse::<S, Dynamic>(&m)?;
-    let mut out = vec![S::zero(); size * size];
-    for j in 0..size {
-        for i in 0..size {
-            let v = inv.elem(i, j);
-            if !v.is_finite() {
-                return None;
+    for col in 0..size {
+        let mut pivot = col;
+        let mut best = num_traits::Float::abs(a[col][col]);
+        for (r, row) in a.iter().enumerate().take(size).skip(col + 1) {
+            let v = num_traits::Float::abs(row[col]);
+            if v > best {
+                best = v;
+                pivot = r;
             }
-            out[j * size + i] = v;
+        }
+        if best <= S::epsilon() || !best.is_finite() {
+            return false;
+        }
+        if pivot != col {
+            a.swap(col, pivot);
+            inv.swap(col, pivot);
+        }
+        let d = a[col][col];
+        for j in 0..size {
+            a[col][j] /= d;
+            inv[col][j] /= d;
+        }
+        for r in 0..size {
+            if r == col {
+                continue;
+            }
+            let f = a[r][col];
+            if f == S::zero() {
+                continue;
+            }
+            for j in 0..size {
+                a[r][j] -= f * a[col][j];
+                inv[r][j] -= f * inv[col][j];
+            }
         }
     }
-    Some(out)
+    for j in 0..size {
+        for i in 0..size {
+            out[j * size + i] = inv[i][j];
+        }
+    }
+    out.iter().all(|v| v.is_finite())
 }
 
 /// Dense matrix-vector product with a column-major square block.
@@ -745,14 +787,22 @@ fn block_mat_vec<S: Real>(m: &[S], v: &[S], size: usize) -> Vec<S> {
 }
 
 #[derive(Clone, Debug)]
-struct EliminatedBlock<S> {
+struct EliminatedBlock {
     start: usize,
     size: usize,
-    /// Inverse of the diagonal block (`size × size`, column-major).
-    inv: Vec<S>,
-    /// Couplings to reduced blocks: `(reduced scalar start, C)` where `C` is
-    /// `reduced_size × size`, column-major.
-    couplings: Vec<(usize, Vec<S>)>,
+    /// Offset of the `size × size` inverse in `BlockSparseLdlt::inverses`.
+    inv_start: usize,
+    /// Range of couplings in `BlockSparseLdlt::couplings`.
+    coupling_start: usize,
+    coupling_end: usize,
+}
+
+#[derive(Clone, Debug)]
+struct Coupling {
+    reduced_start: usize,
+    rows: usize,
+    data_start: usize,
+    len: usize,
 }
 
 /// Block-sparse LDLᵀ with a block Schur complement on the reduced head block.
@@ -768,7 +818,10 @@ pub struct BlockSparseLdlt<T: BlockTypes, S: Real = f64> {
     computed: bool,
     reduced_types: usize,
     schur: Option<Vec<S>>,
-    elims: Vec<EliminatedBlock<S>>,
+    elims: Vec<EliminatedBlock>,
+    inverses: Vec<S>,
+    couplings: Vec<Coupling>,
+    coupling_data: Vec<S>,
     fallback: Option<SparseLinearSolvers<S>>,
     fallback_sparse: SparseMatrix<S>,
     _marker: PhantomData<T>,
@@ -790,6 +843,9 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             reduced_types: 0,
             schur: None,
             elims: Vec::new(),
+            inverses: Vec::new(),
+            couplings: Vec::new(),
+            coupling_data: Vec::new(),
             fallback: None,
             fallback_sparse: SparseMatrix::new(0, 0),
             _marker: PhantomData,
@@ -897,50 +953,66 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
 
         // Eliminated blocks: invert and accumulate C E^{-1} C^T.
         self.elims.clear();
+        self.inverses.clear();
+        self.couplings.clear();
+        self.coupling_data.clear();
+        let mut product = Vec::new();
         for te in rt..nt {
             let k = T::SIZES[te];
             let base = h.base_offset(te);
             for be in 0..h.counts[te] {
                 let start = base + be * k;
                 let pair = Self::block_pair(te, te);
-                let e = match h.blocks[pair].get(&(be, be)) {
-                    Some(block) => block.clone(),
-                    None => return false,
-                };
-                let Some(inv) = inverse_block(&e, k) else {
+                let Some(e) = h.blocks[pair].get(&(be, be)) else {
                     return false;
                 };
-                let mut couplings = Vec::new();
+                let inv_start = self.inverses.len();
+                self.inverses.resize(inv_start + k * k, S::zero());
+                if !inverse_block(e, k, &mut self.inverses[inv_start..]) {
+                    return false;
+                }
+                let coupling_start = self.couplings.len();
                 for tr in 0..rt {
                     let rs = T::SIZES[tr];
                     let pair = Self::block_pair(tr, te);
                     for br in 0..h.counts[tr] {
                         if let Some(c) = h.blocks[pair].get(&(br, be)) {
-                            if c.iter().any(|v| *v != S::zero()) {
-                                couplings.push((h.base_offset(tr) + br * rs, c.clone()));
+                            if c.iter().all(|v| *v == S::zero()) {
+                                continue;
                             }
+                            let data_start = self.coupling_data.len();
+                            self.coupling_data.extend_from_slice(c);
+                            self.couplings.push(Coupling {
+                                reduced_start: h.base_offset(tr) + br * rs,
+                                rows: rs,
+                                data_start,
+                                len: c.len(),
+                            });
                         }
                     }
                 }
+                let coupling_end = self.couplings.len();
                 // S(r1, r2) -= C1 E^{-1} C2^T.
-                for (i, coupling_i) in couplings.iter().enumerate() {
-                    let (r0, c0) = (&coupling_i.0, &coupling_i.1);
-                    let rs0 = c0.len() / k;
-                    let t0 = block_mat_mul_inv(c0, &inv, rs0, k);
-                    for (j, coupling_j) in couplings.iter().enumerate().skip(i) {
-                        let (r1, c1) = (&coupling_j.0, &coupling_j.1);
-                        let rs1 = c1.len() / k;
-                        for a in 0..rs0 {
-                            for b in 0..rs1 {
+                let inv = &self.inverses[inv_start..inv_start + k * k];
+                for i in coupling_start..coupling_end {
+                    let ci = &self.couplings[i];
+                    let c0 = &self.coupling_data[ci.data_start..ci.data_start + ci.len];
+                    product.resize(ci.rows * k, S::zero());
+                    block_mat_mul_inv(c0, inv, ci.rows, k, &mut product);
+                    let t0 = &product;
+                    for j in i..coupling_end {
+                        let cj = &self.couplings[j];
+                        let c1 = &self.coupling_data[cj.data_start..cj.data_start + cj.len];
+                        for a in 0..ci.rows {
+                            for b in 0..cj.rows {
                                 let mut acc = S::zero();
                                 for q in 0..k {
-                                    acc += t0[q * rs0 + a] * c1[q * rs1 + b];
+                                    acc += t0[q * ci.rows + a] * c1[q * cj.rows + b];
                                 }
-                                schur[(r0 + a) * nr + r1 + b] -= acc;
-                                // Mirror across coupling blocks only: for the same
-                                // block the (a, b) loops already cover both triangles.
+                                schur[(ci.reduced_start + a) * nr + cj.reduced_start + b] -= acc;
                                 if i != j {
-                                    schur[(*r1 + b) * nr + (r0 + a)] -= acc;
+                                    schur[(cj.reduced_start + b) * nr + ci.reduced_start + a] -=
+                                        acc;
                                 }
                             }
                         }
@@ -949,8 +1021,9 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
                 self.elims.push(EliminatedBlock {
                     start,
                     size: k,
-                    inv,
-                    couplings,
+                    inv_start,
+                    coupling_start,
+                    coupling_end,
                 });
             }
         }
@@ -990,20 +1063,26 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         for (i, value) in rhs.iter().enumerate().take(nr) {
             reduced_rhs.set_at(i, *value);
         }
-        let mut ys = Vec::with_capacity(self.elims.len());
+        let ne = rhs.len() - nr;
+        let mut ys = vec![S::zero(); ne];
         for e in &self.elims {
-            let y = block_mat_vec(&e.inv, &rhs[e.start..e.start + e.size], e.size);
-            for (r0, c) in &e.couplings {
-                let rs = c.len() / e.size;
-                for i in 0..rs {
+            let inv = &self.inverses[e.inv_start..e.inv_start + e.size * e.size];
+            let y = block_mat_vec(inv, &rhs[e.start..e.start + e.size], e.size);
+            ys[e.start - nr..e.start - nr + e.size].copy_from_slice(&y);
+            for coupling in &self.couplings[e.coupling_start..e.coupling_end] {
+                let c =
+                    &self.coupling_data[coupling.data_start..coupling.data_start + coupling.len];
+                for i in 0..coupling.rows {
                     let mut acc = S::zero();
                     for j in 0..e.size {
-                        acc += c[j * rs + i] * y[j];
+                        acc += c[j * coupling.rows + i] * y[j];
                     }
-                    reduced_rhs.set_at(r0 + i, reduced_rhs.at(r0 + i) - acc);
+                    reduced_rhs.set_at(
+                        coupling.reduced_start + i,
+                        reduced_rhs.at(coupling.reduced_start + i) - acc,
+                    );
                 }
             }
-            ys.push(y);
         }
         let mut dense = zeros_matrix::<S, Dynamic>(nr, nr);
         for j in 0..nr {
@@ -1021,19 +1100,24 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         for (i, value) in out.iter_mut().enumerate().take(nr) {
             *value = xr.at(i);
         }
-        for (e, y) in self.elims.iter().zip(ys) {
-            let mut t = vec![S::zero(); e.size];
-            for (r0, c) in &e.couplings {
-                let rs = c.len() / e.size;
+        let mut t = vec![S::zero(); ne];
+        for e in &self.elims {
+            let y = &ys[e.start - nr..e.start - nr + e.size];
+            let t = &mut t[e.start - nr..e.start - nr + e.size];
+            t.fill(S::zero());
+            for coupling in &self.couplings[e.coupling_start..e.coupling_end] {
+                let c =
+                    &self.coupling_data[coupling.data_start..coupling.data_start + coupling.len];
                 for j in 0..e.size {
                     let mut acc = S::zero();
-                    for i in 0..rs {
-                        acc += c[j * rs + i] * xr.at(r0 + i);
+                    for i in 0..coupling.rows {
+                        acc += c[j * coupling.rows + i] * xr.at(coupling.reduced_start + i);
                     }
                     t[j] += acc;
                 }
             }
-            let corr = block_mat_vec(&e.inv, &t, e.size);
+            let inv = &self.inverses[e.inv_start..e.inv_start + e.size * e.size];
+            let corr = block_mat_vec(inv, t, e.size);
             for j in 0..e.size {
                 out[e.start + j] = y[j] - corr[j];
             }
@@ -1094,9 +1178,9 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
     }
 }
 
-/// `C * E^{-1}` for a `rows × k` coupling block `C` (column-major).
-fn block_mat_mul_inv<S: Real>(c: &[S], inv: &[S], rows: usize, k: usize) -> Vec<S> {
-    let mut out = vec![S::zero(); rows * k];
+/// `C * E^{-1}` for a `rows × k` coupling block `C` (column-major), into `out`.
+fn block_mat_mul_inv<S: Real>(c: &[S], inv: &[S], rows: usize, k: usize, out: &mut [S]) {
+    debug_assert_eq!(out.len(), rows * k);
     for q in 0..k {
         for i in 0..rows {
             let mut acc = S::zero();
@@ -1106,7 +1190,6 @@ fn block_mat_mul_inv<S: Real>(c: &[S], inv: &[S], rows: usize, k: usize) -> Vec<
             out[q * rows + i] = acc;
         }
     }
-    out
 }
 
 // --- HessianStorage implementation -----------------------------------------

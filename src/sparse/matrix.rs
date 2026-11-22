@@ -254,15 +254,20 @@ impl<S: Real> SparseMatrix<S> {
         if indices.is_empty() {
             return;
         }
-        let is_fixed = |i: usize| indices.binary_search(&i).is_ok();
+        let mut is_fixed = vec![false; self.ncols.max(self.nrows)];
+        for &i in indices {
+            if i < is_fixed.len() {
+                is_fixed[i] = true;
+            }
+        }
         for j in 0..self.ncols {
             for p in self.col_ptrs[j]..self.col_ptrs[j + 1] {
                 let i = self.row_indices[p];
                 if i == j {
-                    if is_fixed(i) {
+                    if is_fixed[i] {
                         self.values[p] = S::one();
                     }
-                } else if is_fixed(i) || is_fixed(j) {
+                } else if is_fixed[i] || is_fixed[j] {
                     self.values[p] = S::zero();
                 }
             }
