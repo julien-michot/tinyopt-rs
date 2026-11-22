@@ -24,6 +24,15 @@ pub fn tinyopt_options(kind: &Kind) -> Options {
     options.stop.max_consec_failures = 10;
     options.lm.jacobi_scaling = true;
 
+    // Benchmark-only override: `TINYOPT_BENCH_SOLVER=cholmod` routes sparse
+    // systems through CHOLMOD (requires `--features suitesparse`).
+    if matches!(
+        std::env::var("TINYOPT_BENCH_SOLVER").as_deref(),
+        Ok("cholmod") | Ok("suitesparse") | Ok("CHOLMOD")
+    ) {
+        options.linear.method = tinyopt::backend::LinearSolverMethod::SuiteSparse;
+    }
+
     match kind {
         Kind::DenseMathStatic { single, .. } | Kind::DenseMathDynamic { single, .. } => {
             if *single {

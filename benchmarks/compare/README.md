@@ -44,6 +44,17 @@ The harness looks for `../exp-mop/build-bench/benchmarks/tinyopt/tinyopt_bench_t
 override with `--cpp-bench <path>`. Missing binaries are skipped with a warning and
 reported as `—`.
 
+### CHOLMOD variant
+
+Build with the `suitesparse` feature and set `TINYOPT_BENCH_SOLVER=cholmod` to route
+tinyopt-rs sparse systems through CHOLMOD (the build needs SuiteSparse, e.g. the
+`pixi run -e suitesparse` environment):
+
+```sh
+pixi run -e suitesparse cargo run --release --manifest-path benchmarks/compare/Cargo.toml \
+    --features suitesparse -- run --backends tinyopt --filter sparse
+```
+
 ## Benchmark matrix
 
 | Category | Cases |

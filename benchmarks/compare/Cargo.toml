@@ -7,6 +7,10 @@ publish = false
 # Standalone package: keep the Ceres build out of the library's test loop.
 [workspace]
 
+[features]
+# Build with `--features suitesparse` to benchmark the optional CHOLMOD backend.
+suitesparse = ["tinyopt/suitesparse"]
+
 [dependencies]
 tinyopt = { path = "../..", default-features = false, features = ["nalgebra"] }
 ceres-solver = { version = "0.5", default-features = false, features = ["source"] }

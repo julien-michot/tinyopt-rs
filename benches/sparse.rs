@@ -304,6 +304,235 @@ fn sparse_ordering(c: &mut Criterion) {
     }
 }
 
+/// CHOLMOD vs the built-in simplicial LDLᵀ on a 2-D 5-point Laplacian grid.
+///
+/// `cold` includes the symbolic analysis; `warm` reuses it and only
+/// refactorizes the values, which is what the optimizer does per iteration.
+#[cfg(feature = "suitesparse")]
+fn sparse_solver_cholmod(c: &mut Criterion) {
+    use tinyopt::backend::LinearSolverMethod;
+    use tinyopt::options::LinearSolverOptions;
+    use tinyopt::sparse::{SparseLinearSolvers, SparseMatrix};
+
+    let mut group = c.benchmark_group("sparse_solve");
+    group.sample_size(30);
+    for (label, n) in [("grid20", 20usize), ("grid40", 40), ("grid80", 80)] {
+        let dims = n * n;
+        let mut triplets = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                let k = i * n + j;
+                triplets.push((k, k, 4.0));
+                if i + 1 < n {
+                    triplets.push((k, k + n, -1.0));
+                    triplets.push((k + n, k, -1.0));
+                }
+                if j + 1 < n {
+                    triplets.push((k, k + 1, -1.0));
+                    triplets.push((k + 1, k, -1.0));
+                }
+            }
+        }
+        let a = SparseMatrix::<f64>::from_triplets(dims, dims, &triplets);
+        let b: Vec<f64> = (0..dims).map(|i| ((i as f64 * 7.0) % 13.0) - 6.0).collect();
+        for (name, method) in [
+            ("ldlt", LinearSolverMethod::Ldlt),
+            ("cholmod", LinearSolverMethod::SuiteSparse),
+        ] {
+            let options = LinearSolverOptions {
+                method,
+                ..Default::default()
+            };
+            let mut cold = options.clone();
+            group.bench_function(format!("{label}/{name}/cold"), |bench| {
+                bench.iter(|| {
+                    let mut solver = SparseLinearSolvers::<f64>::new(cold.clone());
+                    assert!(solver.analyze(&a, 0));
+                    assert!(solver.compute(&a));
+                    std::hint::black_box(solver.solve(&a, &b).unwrap())
+                })
+            });
+
+            let mut solver = SparseLinearSolvers::<f64>::new(options);
+            assert!(solver.analyze(&a, 0));
+            group.bench_function(format!("{label}/{name}/warm"), |bench| {
+                bench.iter(|| {
+                    assert!(solver.compute(&a));
+                    std::hint::black_box(solver.solve(&a, &b).unwrap())
+                })
+            });
+            cold.method = method;
+        }
+    }
+    group.finish();
+}
+
+/// End-to-end sparse optimization with the built-in LDLᵀ vs CHOLMOD.
+#[cfg(feature = "suitesparse")]
+fn sparse_optimizer_cholmod(c: &mut Criterion) {
+    use tinyopt::backend::LinearSolverMethod;
+
+    fn grid_acc(n: usize) -> impl Fn(&[f64], Option<&mut Vx>, Option<&mut SparseMat>) -> Cost {
+        move |x: &[f64], grad: Option<&mut Vx>, h: Option<&mut SparseMat>| -> Cost {
+            let mut cost = 0.0;
+            let mut g = grad;
+            let mut h = h;
+            for (i, xi) in x.iter().enumerate() {
+                let r = xi - 1.0;
+                cost += r * r;
+                if let Some(g) = g.as_mut() {
+                    g.set_at(i, g.at(i) + r);
+                }
+                if let Some(h) = h.as_mut() {
+                    *h.coeff_ref(i, i) += 1.0;
+                }
+            }
+            let mut edges = 0usize;
+            for i in 0..n {
+                for j in 0..n {
+                    let k = i * n + j;
+                    if j + 1 < n {
+                        let r = x[k + 1] - x[k];
+                        cost += r * r;
+                        edges += 1;
+                        if let Some(g) = g.as_mut() {
+                            g.set_at(k, g.at(k) - r);
+                            g.set_at(k + 1, g.at(k + 1) + r);
+                        }
+                        if let Some(h) = h.as_mut() {
+                            *h.coeff_ref(k, k) += 1.0;
+                            *h.coeff_ref(k + 1, k + 1) += 1.0;
+                            *h.coeff_ref(k, k + 1) -= 1.0;
+                            *h.coeff_ref(k + 1, k) -= 1.0;
+                        }
+                    }
+                    if i + 1 < n {
+                        let r = x[k + n] - x[k];
+                        cost += r * r;
+                        edges += 1;
+                        if let Some(g) = g.as_mut() {
+                            g.set_at(k, g.at(k) - r);
+                            g.set_at(k + n, g.at(k + n) + r);
+                        }
+                        if let Some(h) = h.as_mut() {
+                            *h.coeff_ref(k, k) += 1.0;
+                            *h.coeff_ref(k + n, k + n) += 1.0;
+                            *h.coeff_ref(k, k + n) -= 1.0;
+                            *h.coeff_ref(k + n, k) -= 1.0;
+                        }
+                    }
+                }
+            }
+            Cost::with_num_residuals(cost, (x.len() + edges) as i32)
+        }
+    }
+
+    let mut group = c.benchmark_group("sparse_optimizer");
+    group.sample_size(10);
+    for (label, dims) in [("chain1000", 1000usize)] {
+        let acc = sparse_chain_acc(dims);
+        for (name, method) in [
+            ("ldlt", LinearSolverMethod::Ldlt),
+            ("cholmod", LinearSolverMethod::SuiteSparse),
+        ] {
+            let mut opts = options();
+            opts.linear.method = method;
+            let mut opt = lm::Optimizer::<Vec<f64>, SparseMat>::new(opts);
+            group.bench_function(format!("{label}/{name}"), |b| {
+                b.iter(|| {
+                    let mut x = vec![0.0; dims];
+                    let summary = opt.optimize(&mut x, &acc);
+                    std::hint::black_box(summary.final_cost.cost)
+                })
+            });
+        }
+    }
+    for (label, n) in [("grid20", 20usize), ("grid40", 40)] {
+        let dims = n * n;
+        let acc = grid_acc(n);
+        for (name, method) in [
+            ("ldlt", LinearSolverMethod::Ldlt),
+            ("cholmod", LinearSolverMethod::SuiteSparse),
+        ] {
+            let mut opts = options();
+            opts.linear.method = method;
+            let mut opt = lm::Optimizer::<Vec<f64>, SparseMat>::new(opts);
+            group.bench_function(format!("{label}/{name}"), |b| {
+                b.iter(|| {
+                    let mut x = vec![0.0; dims];
+                    let summary = opt.optimize(&mut x, &acc);
+                    std::hint::black_box(summary.final_cost.cost)
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
+/// Same grids but with a 60-parameter Schur head block (bundle-adjustment
+/// shape): CHOLMOD factorizes the eliminated block, as in the C++ dispatch.
+#[cfg(feature = "suitesparse")]
+fn sparse_solve_schur(c: &mut Criterion) {
+    use tinyopt::backend::LinearSolverMethod;
+    use tinyopt::options::LinearSolverOptions;
+    use tinyopt::sparse::{SparseLinearSolvers, SparseMatrix};
+
+    let mut group = c.benchmark_group("sparse_schur");
+    group.sample_size(30);
+    for (label, n) in [("grid20", 20usize), ("grid40", 40)] {
+        let dims = n * n;
+        let mut triplets = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                let k = i * n + j;
+                triplets.push((k, k, 4.0));
+                if i + 1 < n {
+                    triplets.push((k, k + n, -1.0));
+                    triplets.push((k + n, k, -1.0));
+                }
+                if j + 1 < n {
+                    triplets.push((k, k + 1, -1.0));
+                    triplets.push((k + 1, k, -1.0));
+                }
+            }
+        }
+        let a = SparseMatrix::<f64>::from_triplets(dims, dims, &triplets);
+        let b: Vec<f64> = (0..dims).map(|i| ((i as f64 * 7.0) % 13.0) - 6.0).collect();
+        for (name, method) in [
+            ("ldlt", LinearSolverMethod::Ldlt),
+            ("cholmod", LinearSolverMethod::SuiteSparse),
+        ] {
+            let options = LinearSolverOptions {
+                method,
+                ..Default::default()
+            };
+            let mut solver = SparseLinearSolvers::<f64>::new(options);
+            assert!(solver.analyze(&a, 60));
+            group.bench_function(format!("{label}/{name}/warm"), |bench| {
+                bench.iter(|| {
+                    assert!(solver.compute(&a));
+                    std::hint::black_box(solver.solve(&a, &b).unwrap())
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
+#[cfg(feature = "suitesparse")]
+criterion_group!(
+    benches,
+    sparse_chains,
+    sparse_chain_orderings,
+    tridiag_chain,
+    block_sparse_ba,
+    sparse_ordering,
+    sparse_solver_cholmod,
+    sparse_optimizer_cholmod,
+    sparse_solve_schur
+);
+
+#[cfg(not(feature = "suitesparse"))]
 criterion_group!(
     benches,
     sparse_chains,
