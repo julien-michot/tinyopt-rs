@@ -309,12 +309,16 @@ fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
     let camera_offset = 6 * problem.camera_count();
     let mut opt = lm::Optimizer::<BaParams, SparseMat>::new(tinyopt_options(&case.kind));
     let mut x = ba_params(&problem);
+    // Reuse the triplet buffer across evaluations (the accumulation API is `Fn`).
+    let buffer = std::cell::RefCell::new(Vec::with_capacity(
+        problem.observations.len() * (36 + 9 + 18),
+    ));
 
     let acc = |xv: &[f64], grad: Option<&mut V>, h: Option<&mut SparseMat>| {
         let mut cost = 0.0;
         let mut g = grad;
-        let mut triplets: Vec<(usize, usize, f64)> =
-            Vec::with_capacity(problem.observations.len() * (36 + 9 + 18));
+        let mut triplets = buffer.borrow_mut();
+        triplets.clear();
         for observation in &problem.observations {
             let camera_index = observation.camera;
             let point_index = observation.point;
@@ -345,28 +349,26 @@ fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
                     g.set_at(point_start + i, g.at(point_start + i) + acc);
                 }
             }
-            for row in 0..2 {
+            // Accumulate the full J^T J blocks once (duplicates across
+            // observations are summed by `from_triplets`).
+            if h.is_some() {
                 for i in 0..6 {
                     for j in 0..6 {
-                        triplets.push((
-                            camera_index * 6 + i,
-                            camera_index * 6 + j,
-                            jc[row * 6 + i] * jc[row * 6 + j],
-                        ));
-                    }
-                    for j in 0..3 {
-                        let value = jc[row * 6 + i] * jp[row * 3 + j];
-                        triplets.push((camera_index * 6 + i, point_start + j, value));
-                        triplets.push((point_start + j, camera_index * 6 + i, value));
+                        let acc: f64 = (0..2).map(|row| jc[row * 6 + i] * jc[row * 6 + j]).sum();
+                        triplets.push((camera_index * 6 + i, camera_index * 6 + j, acc));
                     }
                 }
                 for i in 0..3 {
                     for j in 0..3 {
-                        triplets.push((
-                            point_start + i,
-                            point_start + j,
-                            jp[row * 3 + i] * jp[row * 3 + j],
-                        ));
+                        let acc: f64 = (0..2).map(|row| jp[row * 3 + i] * jp[row * 3 + j]).sum();
+                        triplets.push((point_start + i, point_start + j, acc));
+                    }
+                }
+                for i in 0..6 {
+                    for j in 0..3 {
+                        let acc: f64 = (0..2).map(|row| jc[row * 6 + i] * jp[row * 3 + j]).sum();
+                        triplets.push((camera_index * 6 + i, point_start + j, acc));
+                        triplets.push((point_start + j, camera_index * 6 + i, acc));
                     }
                 }
             }

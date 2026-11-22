@@ -30,6 +30,7 @@ struct Args {
     full: bool,
     backends: Vec<String>,
     cpp_bench: PathBuf,
+    filter: Option<String>,
 }
 
 impl Default for Args {
@@ -44,6 +45,7 @@ impl Default for Args {
             backends: vec!["tinyopt".into(), "ceres".into(), "cpp".into()],
             cpp_bench: manifest
                 .join("../../../exp-mop/build-bench/benchmarks/tinyopt/tinyopt_bench_tinyopt"),
+            filter: None,
         }
     }
 }
@@ -100,6 +102,10 @@ fn parse_args(argv: Vec<String>) -> Args {
                 i += 1;
                 args.cpp_bench = PathBuf::from(argv.get(i).expect("--cpp-bench needs a value"));
             }
+            "--filter" => {
+                i += 1;
+                args.filter = Some(argv.get(i).expect("--filter needs a value").clone());
+            }
             other => {
                 eprintln!("unknown option: {other}");
                 std::process::exit(2);
@@ -110,9 +116,17 @@ fn parse_args(argv: Vec<String>) -> Args {
     args
 }
 
+fn selected_cases(args: &Args) -> Vec<problems::Case> {
+    let mut cases = problems::cases(args.full, args.quick);
+    if let Some(filter) = &args.filter {
+        cases.retain(|case| case.name.contains(filter.as_str()));
+    }
+    cases
+}
+
 fn list(args: &Args) {
     println!("{:<26} {:<18} CATEGORY", "CASE", "SHORT");
-    for case in problems::cases(args.full, args.quick) {
+    for case in selected_cases(args) {
         println!(
             "{:<26} {:<18} {}",
             case.name,
@@ -123,7 +137,7 @@ fn list(args: &Args) {
 }
 
 fn check(args: &Args) {
-    for case in problems::cases(args.full, args.quick) {
+    for case in selected_cases(args) {
         match case.kind {
             problems::Kind::BundleAdjustmentBlock { cams, points }
             | problems::Kind::BundleAdjustmentSparse { cams, points } => {
@@ -173,7 +187,7 @@ fn check(args: &Args) {
 }
 
 fn run(args: Args) {
-    let cases = problems::cases(args.full, args.quick);
+    let cases = selected_cases(&args);
     let warmup = Duration::from_millis(args.warmup_ms);
     let mut records: Vec<Record> = Vec::new();
     let mut iterations: Vec<IterationRecord> = Vec::new();

@@ -55,42 +55,56 @@ impl<S: Real> SparseMatrix<S> {
 
     /// Build from `(row, col, value)` triplets; duplicate entries are summed.
     pub fn from_triplets(rows: usize, cols: usize, triplets: &[(usize, usize, S)]) -> Self {
-        // Sort by (column, row) once, then build the CSC arrays in a linear pass
-        // (duplicates are summed), avoiding a per-entry tree insertion.
-        let mut sorted: Vec<(usize, usize, S)> = Vec::with_capacity(triplets.len());
-        for &(i, j, v) in triplets {
-            assert!(i < rows && j < cols, "triplet index out of bounds");
-            sorted.push((j, i, v));
-        }
-        sorted.sort_unstable_by_key(|&(j, i, _)| (j, i));
-
+        // Counting sort by column (O(nnz + n)), then sort the (short) row lists
+        // inside each column and merge duplicates. This avoids the
+        // O(nnz log nnz) comparison sort over the whole triplet list.
         let mut counts = vec![0usize; cols];
-        let mut row_indices = Vec::with_capacity(sorted.len());
-        let mut values = Vec::with_capacity(sorted.len());
-        let mut k = 0;
-        while k < sorted.len() {
-            let (j, i, mut v) = sorted[k];
-            k += 1;
-            while k < sorted.len() && sorted[k].0 == j && sorted[k].1 == i {
-                v += sorted[k].2;
-                k += 1;
-            }
+        for &(i, j, _) in triplets {
+            assert!(i < rows && j < cols, "triplet index out of bounds");
             counts[j] += 1;
-            row_indices.push(i);
-            values.push(v);
         }
-
         let mut col_ptrs = vec![0usize; cols + 1];
         for j in 0..cols {
             col_ptrs[j + 1] = col_ptrs[j] + counts[j];
         }
-        Self {
-            nrows: rows,
-            ncols: cols,
-            col_ptrs,
-            row_indices,
-            values,
+        let mut pos = col_ptrs.clone();
+        // Every slot is written exactly once, so skip zero-initialization.
+        let mut buckets: Vec<core::mem::MaybeUninit<(usize, S)>> =
+            Vec::with_capacity(triplets.len());
+        // SAFETY: the capacity is `triplets.len()` and each slot is written below.
+        unsafe { buckets.set_len(triplets.len()) };
+        for &(i, j, v) in triplets {
+            let p = pos[j];
+            buckets[p].write((i, v));
+            pos[j] += 1;
         }
+        // SAFETY: all slots were initialized by the loop above and
+        // `MaybeUninit<T>` has the same layout as `T`.
+        let (ptr, len, cap) = (buckets.as_mut_ptr(), buckets.len(), buckets.capacity());
+        core::mem::forget(buckets);
+        let mut buckets: Vec<(usize, S)> =
+            unsafe { Vec::from_raw_parts(ptr as *mut (usize, S), len, cap) };
+
+        let mut row_indices = Vec::with_capacity(triplets.len());
+        let mut values = Vec::with_capacity(triplets.len());
+        let mut merged_ptrs = vec![0usize; cols + 1];
+        for j in 0..cols {
+            let slice = &mut buckets[col_ptrs[j]..col_ptrs[j + 1]];
+            slice.sort_unstable_by_key(|&(row, _)| row);
+            let mut k = 0;
+            while k < slice.len() {
+                let (row, mut value) = slice[k];
+                k += 1;
+                while k < slice.len() && slice[k].0 == row {
+                    value += slice[k].1;
+                    k += 1;
+                }
+                row_indices.push(row);
+                values.push(value);
+            }
+            merged_ptrs[j + 1] = row_indices.len();
+        }
+        Self::from_csc_parts(rows, cols, merged_ptrs, row_indices, values)
     }
 
     /// Build a CSC matrix from prepared arrays (no validation, no sorting).
