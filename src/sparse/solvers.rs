@@ -133,6 +133,18 @@ impl<S: Real> SparseLinearSolvers<S> {
         matches!(self.options.method, LinearSolverMethod::SuiteSparse)
     }
 
+    /// Solve the eliminated block into `out`, reusing the caller's buffer.
+    fn solve_eliminated_into(&self, rhs: &[S], out: &mut [S]) -> bool {
+        #[cfg(feature = "suitesparse")]
+        if self.uses_cholmod() {
+            let Some(cholmod) = self.cholmod.as_ref() else {
+                return false;
+            };
+            return cholmod.solve(rhs, out);
+        }
+        self.ldlt.solve_into(rhs, out)
+    }
+
     /// Solve the eliminated block (full matrix when there is no Schur
     /// partition) through the configured sparse backend.
     fn solve_eliminated(&self, rhs: &[S]) -> Option<Vec<S>> {
@@ -269,12 +281,15 @@ impl<S: Real> SparseLinearSolvers<S> {
 
         // Schur complement S = H_rr - C A_e^{-1} C^T.
         let mut rhs_e = vec![S::zero(); ne];
+        let mut w = vec![S::zero(); ne];
         for col in 0..nr {
             rhs_e.iter_mut().for_each(|v| *v = S::zero());
             for (e, v) in ct.column(col) {
                 rhs_e[e] = v;
             }
-            let w = self.solve_eliminated(&rhs_e)?;
+            if !self.solve_eliminated_into(&rhs_e, &mut w) {
+                return None;
+            }
             let cw = c.mul_vec(&w);
             for (r, cw_r) in cw.iter().enumerate().take(nr) {
                 let value = reduced.elem(r, col) - *cw_r;

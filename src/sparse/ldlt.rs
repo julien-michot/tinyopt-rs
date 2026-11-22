@@ -324,8 +324,18 @@ impl<S: Real> SimplicialLdl<S> {
 
     /// Solve `A x = rhs` using the cached factorization.
     pub fn solve(&self, rhs: &[S]) -> Option<Vec<S>> {
-        if !self.computed || rhs.len() != self.n {
-            return None;
+        let mut out = vec![S::zero(); self.n];
+        if self.solve_into(rhs, &mut out) {
+            Some(out)
+        } else {
+            None
+        }
+    }
+
+    /// Solve into a caller-provided buffer (no allocation).
+    pub fn solve_into(&self, rhs: &[S], out: &mut [S]) -> bool {
+        if !self.computed || rhs.len() != self.n || out.len() != self.n {
+            return false;
         }
         let n = self.n;
         // Permute the right-hand side into the elimination order.
@@ -358,16 +368,11 @@ impl<S: Real> SimplicialLdl<S> {
         }
 
         // Unpermute the solution back to the original ordering.
-        let mut out = vec![S::zero(); n];
         for (i, v) in x.iter().enumerate() {
             out[self.perm[i]] = *v;
         }
 
-        if out.iter().all(|v| v.is_finite()) {
-            Some(out)
-        } else {
-            None
-        }
+        out.iter().all(|v| v.is_finite())
     }
 
     /// Dimension of the factorization.
