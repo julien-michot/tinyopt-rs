@@ -42,7 +42,7 @@ mod optimize;
 
 pub use backend::{Dim, Dynamic, Static};
 pub use block_sparse::{BlockSparseLdlt, BlockSparseMat, BlockSparseMatX, BlockTypes, HasPair};
-pub use block_tridiag::{BlockMut, BlockTridiagLdlt, BlockTridiagMat, BlockTridiagMatX};
+pub use block_tridiag::{BlockMut, BlockMutN, BlockTridiagLdlt, BlockTridiagMat, BlockTridiagMatX};
 pub use cost::Cost;
 pub use covariance::{CovarianceOptions, CovariancePattern, FinalCovariance};
 pub use math::inverse;

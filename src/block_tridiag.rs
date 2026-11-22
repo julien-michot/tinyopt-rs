@@ -22,13 +22,6 @@ pub struct BlockMut<'a, S> {
     cols: usize,
 }
 
-impl<'a, S> BlockMut<'a, S> {
-    /// Wrap raw column-major block data.
-    pub(crate) fn from_data(data: &'a mut [S], rows: usize, cols: usize) -> Self {
-        Self { data, rows, cols }
-    }
-}
-
 impl<'a, S: Real> BlockMut<'a, S> {
     /// Block shape.
     pub fn shape(&self) -> (usize, usize) {
@@ -89,6 +82,81 @@ impl<'a, S: Real> BlockMut<'a, S> {
     /// Immutable block data (column-major).
     pub fn as_slice(&self) -> &[S] {
         self.data
+    }
+}
+
+/// Mutable view of a compile-time sized `R x C` block (column-major).
+///
+/// Unlike [`BlockMut`], the dimensions are const generics, so the small
+/// matrix-vector loops unroll and vectorize.
+pub struct BlockMutN<'a, S, const R: usize, const C: usize> {
+    data: &'a mut [S],
+}
+
+impl<'a, S, const R: usize, const C: usize> BlockMutN<'a, S, R, C> {
+    pub(crate) fn from_data(data: &'a mut [S]) -> Self {
+        debug_assert_eq!(data.len(), R * C);
+        Self { data }
+    }
+
+    /// Block shape `(rows, cols)`.
+    pub const fn shape(&self) -> (usize, usize) {
+        (R, C)
+    }
+
+    /// Immutable block data (column-major).
+    pub fn as_slice(&self) -> &[S] {
+        self.data
+    }
+
+    /// Element `(i, j)`.
+    pub fn at(&self, i: usize, j: usize) -> S
+    where
+        S: Copy,
+    {
+        self.data[j * R + i]
+    }
+
+    /// Set element `(i, j)`.
+    pub fn set_at(&mut self, i: usize, j: usize, value: S) {
+        self.data[j * R + i] = value;
+    }
+}
+
+impl<S: Real, const R: usize, const C: usize> BlockMutN<'_, S, R, C> {
+    /// `self += a * x * xᵀ`.
+    pub fn add_outer_product_self(&mut self, a: S, x: &[S]) {
+        for (j, xj) in x.iter().take(C).enumerate() {
+            let ay = a * *xj;
+            if ay == S::zero() {
+                continue;
+            }
+            let column = &mut self.data[j * R..(j + 1) * R];
+            for (value, xi) in column.iter_mut().zip(x.iter().take(R)) {
+                *value += ay * *xi;
+            }
+        }
+    }
+
+    /// `self += a * x * yᵀ`.
+    pub fn add_outer_product(&mut self, a: S, x: &[S], y: &[S]) {
+        for (j, yj) in y.iter().take(C).enumerate() {
+            let ay = a * *yj;
+            if ay == S::zero() {
+                continue;
+            }
+            let column = &mut self.data[j * R..(j + 1) * R];
+            for (value, xi) in column.iter_mut().zip(x.iter().take(R)) {
+                *value += ay * *xi;
+            }
+        }
+    }
+
+    /// `self += a * Jᵀ J` where `J` is `m × C` row-major.
+    pub fn add_jtj(&mut self, a: S, j: &[S], m: usize) {
+        for row in 0..m {
+            self.add_outer_product_self(a, &j[row * C..(row + 1) * C]);
+        }
     }
 }
 
