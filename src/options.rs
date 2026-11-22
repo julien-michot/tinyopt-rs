@@ -286,8 +286,6 @@ pub struct LogOptions {
     pub print_dx: bool,
     pub print_inliers: bool,
     pub print_t: bool,
-    /// Log the maximum of all standard deviations (requires solving `H`).
-    pub print_max_stdev: bool,
     pub print_failure: bool,
 }
 
@@ -301,7 +299,6 @@ impl Default for LogOptions {
             print_dx: false,
             print_inliers: false,
             print_t: true,
-            print_max_stdev: false,
             print_failure: false,
         }
     }

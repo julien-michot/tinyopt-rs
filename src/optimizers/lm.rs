@@ -186,6 +186,7 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
             h,
             self.num_reduced,
             &mut self.cache,
+            &self.fixed,
         )?;
         let state = self.state.as_ref().expect("reset() must be called first");
         let n = step.len();

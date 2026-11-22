@@ -116,8 +116,15 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
         grad: &Vector<P::Scalar, P::Dim>,
         h: &H,
     ) -> Option<Step<P::Scalar, P::Dim>> {
-        neg_solve::<P::Scalar, P::Dim, H>(&self.options, grad, h, self.num_reduced, &mut self.cache)
-            .map(|dx| (dx, 0.0))
+        neg_solve::<P::Scalar, P::Dim, H>(
+            &self.options,
+            grad,
+            h,
+            self.num_reduced,
+            &mut self.cache,
+            &self.fixed,
+        )
+        .map(|dx| (dx, 0.0))
     }
 
     fn on_good_step(&mut self, _quality: f64) {}

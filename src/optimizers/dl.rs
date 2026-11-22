@@ -166,6 +166,7 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
             h,
             self.num_reduced,
             &mut self.cache,
+            &self.fixed,
         );
         let hg = h.mul_vec(grad_slice);
         let curvature = (0..n).fold(0.0, |acc, i| {

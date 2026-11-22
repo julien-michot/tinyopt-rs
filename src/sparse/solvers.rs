@@ -63,15 +63,16 @@ impl<S: Real> SparseSolverCache<S> {
         num_reduced: usize,
         out: &mut [S],
     ) -> bool {
-        let reusable = match &self.pattern {
-            Some((col_ptrs, row_indices, reduced, method)) => {
-                *reduced == num_reduced
-                    && *method == options.method
-                    && col_ptrs.as_slice() == h.col_ptrs()
-                    && row_indices.as_slice() == h.row_indices()
-            }
-            None => false,
-        };
+        let reusable = options.reuse_symbolic
+            && match &self.pattern {
+                Some((col_ptrs, row_indices, reduced, method)) => {
+                    *reduced == num_reduced
+                        && *method == options.method
+                        && col_ptrs.as_slice() == h.col_ptrs()
+                        && row_indices.as_slice() == h.row_indices()
+                }
+                None => false,
+            };
         if !reusable {
             self.solver = SparseLinearSolvers::new(options.clone());
             if !self.solver.analyze(h, num_reduced) {

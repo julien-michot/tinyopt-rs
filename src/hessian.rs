@@ -55,6 +55,23 @@ pub trait HessianStorage<S: Real>: Clone + core::fmt::Debug + Send + Sync {
         cache: &mut Self::SolverCache,
     ) -> bool;
 
+    /// Solve restricted to the `free` parameter indices (dense dynamic storage
+    /// only, used by the fixed-parameter permutation optimization).
+    ///
+    /// Returns `false` when the storage does not implement it; callers fall
+    /// back to the masked `solve_into`.
+    fn solve_free_into(
+        &self,
+        options: &LinearSolverOptions,
+        rhs: &[S],
+        free: &[usize],
+        out: &mut [S],
+        cache: &mut Self::SolverCache,
+    ) -> bool {
+        let _ = (options, rhs, free, out, cache);
+        false
+    }
+
     /// Matrix-vector product (convenience allocation).
     fn mul_vec(&self, x: &[S]) -> Vec<S> {
         let mut out = vec![S::zero(); self.dims()];
@@ -142,6 +159,39 @@ fn dense_to_dynamic<S: Real, M: DenseMatrix<S>>(m: &M) -> Matrix<S, Dynamic> {
         }
     }
     out
+}
+
+/// Solve the sub-system over `free` indices (dense dynamic Hessians).
+fn dense_solve_free_into<S: Real, D: crate::backend::Dim>(
+    m: &Matrix<S, D>,
+    options: &LinearSolverOptions,
+    rhs: &[S],
+    free: &[usize],
+    out: &mut [S],
+) -> bool {
+    let n = m.nrows();
+    let nf = free.len();
+    if nf == 0 || nf >= n || m.ncols() != n || rhs.len() != n || out.len() != n {
+        return false;
+    }
+    let mut a = zeros_matrix::<S, Dynamic>(nf, nf);
+    for (i, &ri) in free.iter().enumerate() {
+        for (j, &rj) in free.iter().enumerate() {
+            a.set_elem(i, j, m.elem(ri, rj));
+        }
+    }
+    let mut b = zeros_vector::<S, Dynamic>(nf);
+    for (i, &ri) in free.iter().enumerate() {
+        b.set_at(i, rhs[ri]);
+    }
+    let Some(x) = crate::backend::solve::<S, Dynamic>(options.method, &a, &b) else {
+        return false;
+    };
+    out.fill(S::zero());
+    for (i, &ri) in free.iter().enumerate() {
+        out[ri] = x.at(i);
+    }
+    true
 }
 
 fn dense_solve_into<S: Real, D: crate::backend::Dim>(
@@ -247,6 +297,17 @@ mod impls {
                     _cache: &mut (),
                 ) -> bool {
                     dense_solve_into::<S, Dynamic>(self, options, rhs, out)
+                }
+
+                fn solve_free_into(
+                    &self,
+                    options: &LinearSolverOptions,
+                    rhs: &[S],
+                    free: &[usize],
+                    out: &mut [S],
+                    _cache: &mut (),
+                ) -> bool {
+                    super::dense_solve_free_into::<S, Dynamic>(self, options, rhs, free, out)
                 }
 
                 fn to_dense(&self) -> Matrix<S, Dynamic> {
@@ -388,6 +449,17 @@ mod impls {
             _cache: &mut (),
         ) -> bool {
             dense_solve_into::<S, Dynamic>(self, options, rhs, out)
+        }
+
+        fn solve_free_into(
+            &self,
+            options: &LinearSolverOptions,
+            rhs: &[S],
+            free: &[usize],
+            out: &mut [S],
+            _cache: &mut (),
+        ) -> bool {
+            super::dense_solve_free_into::<S, Dynamic>(self, options, rhs, free, out)
         }
 
         fn to_dense(&self) -> Matrix<S, Dynamic> {

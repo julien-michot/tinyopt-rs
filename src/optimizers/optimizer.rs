@@ -8,7 +8,7 @@
 //! The loop is generic over the Hessian storage (`HessianStorage`), so the same
 //! code drives dense, sparse and block Hessians.
 
-use num_traits::{One, ToPrimitive, Zero};
+use num_traits::{FromPrimitive, One, ToPrimitive, Zero};
 use std::time::Instant;
 
 use crate::backend::{DenseVector, Dim, Matrix, Vector, zeros_vector};
@@ -115,6 +115,19 @@ pub(crate) trait Algorithm<P: Params, H: HessianStorage<P::Scalar>> {
     }
 }
 
+/// Apply the C++ `Options::Cost` scaling to an evaluated cost.
+fn normalize_cost(cost: &mut Cost, scaling: &crate::options::CostScaling) {
+    if !scaling.use_squared_norm {
+        cost.cost = cost.cost.max(0.0).sqrt();
+    }
+    if scaling.downscale_by_2 {
+        cost.cost *= 0.5;
+    }
+    if scaling.normalize && cost.num_residuals > 0 {
+        cost.cost /= cost.num_residuals as f64;
+    }
+}
+
 fn to_f64<S: Real>(v: S) -> f64 {
     v.to_f64().expect("scalar fits in f64")
 }
@@ -176,6 +189,7 @@ where
     algo.set_fixed_indices(&fixed);
 
     let mut cost = f.eval(P::as_slice(x), None, None);
+    normalize_cost(&mut cost, &options.cost);
     if cost.num_residuals == 0 {
         sum.stop_reason = StopReason::Skipped;
         return sum;
@@ -190,17 +204,19 @@ where
 
     let max_iters = options.stop.max_iters as usize;
     let mut reason = StopReason::None;
+    let mut h_diag = zeros_vector::<P::Scalar, P::Dim>(dims);
 
     for _iter in 0..max_iters {
         let iter = sum.num_iters;
         // --- Build the linear system at the current parameters ---------------
         DenseVector::set_zero(&mut grad);
         h.set_zero();
-        let build = if algo.needs_hessian() {
+        let mut build = if algo.needs_hessian() {
             f.eval(P::as_slice(x), Some(&mut grad), Some(&mut h))
         } else {
             f.eval(P::as_slice(x), Some(&mut grad), None)
         };
+        normalize_cost(&mut build, &options.cost);
 
         if build.num_residuals == 0 {
             reason = StopReason::Skipped;
@@ -212,6 +228,33 @@ where
         {
             reason = StopReason::SystemHasNanOrInf;
             break;
+        }
+        // Optional gradient clipping (element-wise, zero disables).
+        if options.opt.grad_clipping > 0.0 {
+            let limit = P::Scalar::from_f64(options.opt.grad_clipping as f64).expect("fits");
+            for v in DenseVector::as_mut_slice(&mut grad) {
+                if *v > limit {
+                    *v = limit;
+                } else if *v < -limit {
+                    *v = -limit;
+                }
+            }
+        }
+        // Reject systems whose Hessian diagonal is numerically zero.
+        if options.hessian.check_min_h_diag > 0.0 && algo.needs_hessian() {
+            h.diagonal_into(DenseVector::as_mut_slice(&mut h_diag));
+            let threshold =
+                P::Scalar::from_f64(options.hessian.check_min_h_diag as f64).expect("fits");
+            if DenseVector::as_slice(&h_diag)
+                .iter()
+                .any(|d| num_traits::Float::abs(*d) < threshold)
+            {
+                if options.log.enable {
+                    log::debug!("#{}: Hessian diagonal below {threshold:?}", iter);
+                }
+                reason = StopReason::SolverFailed;
+                break;
+            }
         }
         sum.num_residuals = build.num_residuals as u16;
         sum.final_cost = build;
@@ -245,10 +288,28 @@ where
         // --- Solve for the step ---------------------------------------------
         algo.precondition(&mut grad, &mut h);
         let Some((mut dx, predicted)) = algo.solve(&grad, &h) else {
+            if options.log.print_failure {
+                log::error!(
+                    "❌ #{}: failed to solve the linear system\n  solver: {}\n  grad = {:?}\n  H = {:?}",
+                    iter,
+                    algo.state_string(),
+                    grad,
+                    h
+                );
+            }
             reason = StopReason::SolverFailed;
             break;
         };
         if !all_finite(DenseVector::as_slice(&dx)) {
+            if options.log.print_failure {
+                log::error!(
+                    "❌ #{}: non-finite step\n  solver: {}\n  dx = {:?}\n  grad = {:?}",
+                    iter,
+                    algo.state_string(),
+                    dx,
+                    grad
+                );
+            }
             reason = StopReason::SystemHasNanOrInf;
             break;
         }
@@ -291,13 +352,24 @@ where
             reason = StopReason::UserStopped;
         }
 
-        let trial = f.eval(P::as_slice(x), None, None);
+        let mut trial = f.eval(P::as_slice(x), None, None);
+        normalize_cost(&mut trial, &options.cost);
         let accepted = trial.cost.is_finite() && trial.cost < build.cost;
 
         if accepted {
             let derr = build.cost - trial.cost;
-            let quality = if options.opt.use_step_quality && predicted > 0.0 {
-                derr / predicted
+            let quality = if options.opt.use_step_quality {
+                if predicted > 0.0 {
+                    derr / predicted
+                } else {
+                    0.0
+                }
+            } else if options.opt.use_step_quality_approx {
+                if build.cost > f64::EPSILON {
+                    derr / build.cost
+                } else {
+                    0.0
+                }
             } else {
                 1.0
             };
@@ -453,10 +525,31 @@ pub(crate) fn neg_solve<S: Real, D: Dim, H: HessianStorage<S>>(
     h: &H,
     num_reduced: usize,
     cache: &mut H::SolverCache,
+    fixed: &FixedSet,
 ) -> Option<Vector<S, D>> {
     let mut neg_grad = grad.clone();
     DenseVector::scale(&mut neg_grad, -S::one());
     let mut out = zeros_vector::<S, D>(grad.len());
+
+    // Fixed-parameter permutation optimization (dense dynamic Hessians): solve
+    // the free sub-system when enough parameters are fixed.
+    let n = grad.len();
+    if options.opt.min_fixed_ratio > 0.0 && !fixed.is_empty() && n > 0 && num_reduced == 0 {
+        let ratio = fixed.len() as f32 / n as f32;
+        if ratio >= options.opt.min_fixed_ratio {
+            let free: Vec<usize> = (0..n).filter(|i| !fixed.contains(*i)).collect();
+            if h.solve_free_into(
+                &options.linear,
+                DenseVector::as_slice(&neg_grad),
+                &free,
+                DenseVector::as_mut_slice(&mut out),
+                cache,
+            ) {
+                return Some(out);
+            }
+        }
+    }
+
     let ok = h.solve_into(
         &options.linear,
         DenseVector::as_slice(&neg_grad),
@@ -476,7 +569,13 @@ fn scaled_step<S: Real, D: Dim>(alpha: f64, dx: &Vector<S, D>) -> Vector<S, D> {
 }
 
 /// Cost at `x + alpha * dx`, leaving `x` unchanged.
-fn trial_cost<P, F, H>(x: &mut P, alpha: f64, dx: &Vector<P::Scalar, P::Dim>, f: &F) -> f64
+fn trial_cost<P, F, H>(
+    x: &mut P,
+    alpha: f64,
+    dx: &Vector<P::Scalar, P::Dim>,
+    f: &F,
+    scaling: &crate::options::CostScaling,
+) -> f64
 where
     P: Params,
     H: HessianStorage<P::Scalar>,
@@ -484,7 +583,9 @@ where
 {
     let step = scaled_step::<P::Scalar, P::Dim>(alpha, dx);
     P::plus_eq(x, DenseVector::as_slice(&step));
-    let cost = f.eval(P::as_slice(x), None, None).cost;
+    let mut cost = f.eval(P::as_slice(x), None, None);
+    normalize_cost(&mut cost, scaling);
+    let cost = cost.cost;
     let mut back = step;
     DenseVector::scale(&mut back, -P::Scalar::one());
     P::plus_eq(x, DenseVector::as_slice(&back));
@@ -521,7 +622,7 @@ where
         LineSearchMethod::None => return dx.clone(),
         LineSearchMethod::Backtracking => {
             for _ in 0..ls.max_iters {
-                let f_trial = trial_cost::<P, F, H>(x, alpha, dx, f);
+                let f_trial = trial_cost::<P, F, H>(x, alpha, dx, f, &options.cost);
                 if f_trial.is_finite() && f_trial <= f0 + c1 * alpha * directional {
                     best_alpha = alpha;
                     break;
@@ -535,7 +636,7 @@ where
         }
         LineSearchMethod::Wolfe => {
             for _ in 0..ls.max_iters {
-                let f_trial = trial_cost::<P, F, H>(x, alpha, dx, f);
+                let f_trial = trial_cost::<P, F, H>(x, alpha, dx, f, &options.cost);
                 if f_trial.is_finite() && f_trial <= f0 + c1 * alpha * directional {
                     best_alpha = alpha;
                     break;
@@ -561,22 +662,22 @@ where
             if h > min_step {
                 let mut c = a + INVPHI2 * h;
                 let mut d = a + INVPHI * h;
-                let mut fc = trial_cost::<P, F, H>(x, c, dx, f);
-                let mut fd = trial_cost::<P, F, H>(x, d, dx, f);
+                let mut fc = trial_cost::<P, F, H>(x, c, dx, f, &options.cost);
+                let mut fd = trial_cost::<P, F, H>(x, d, dx, f, &options.cost);
                 for _ in 0..ls.max_iters {
                     if fc < fd {
                         d = c;
                         fd = fc;
                         h *= INVPHI;
                         c = a + INVPHI2 * h;
-                        fc = trial_cost::<P, F, H>(x, c, dx, f);
+                        fc = trial_cost::<P, F, H>(x, c, dx, f, &options.cost);
                     } else {
                         a = c;
                         c = d;
                         fc = fd;
                         h *= INVPHI;
                         d = a + INVPHI * h;
-                        fd = trial_cost::<P, F, H>(x, d, dx, f);
+                        fd = trial_cost::<P, F, H>(x, d, dx, f, &options.cost);
                     }
                     if h < min_step {
                         break;
