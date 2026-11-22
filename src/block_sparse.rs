@@ -7,7 +7,7 @@
 //! Block sizes are declared with `block_sparse_types!`, which also generates
 //! the compile-time `HasPair<R, C>` checks used by [`BlockSparseMat::block_mut`].
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use crate::backend::{DenseMatrix, DenseVector, Dynamic, Matrix, zeros_matrix, zeros_vector};
@@ -53,11 +53,193 @@ macro_rules! block_sparse_types {
     };
 }
 
+/// Maximum size of a dense block-index grid (same order of magnitude as the
+/// C++ `kMaxDenseGridElements`); larger pairs fall back to a hash map.
+const MAX_DENSE_GRID: usize = 16_000_000;
+
+/// Blocks of one upper-triangle type pair.
+///
+/// Blocks are stored contiguously in a single `Vec` (no per-block allocation,
+/// like the C++ `std::vector<Matrix<R, C>>`), and resolved in O(1) through a
+/// diagonal grid and a dense row-major index grid, with a hash fallback for
+/// very large pairs.
+#[derive(Clone, Debug)]
+struct PairStorage<S> {
+    rows: usize,
+    cols: usize,
+    block_size: usize,
+    diagonal: bool,
+    grid_ready: bool,
+    coords: Vec<(u32, u32)>,
+    data: Vec<S>,
+    diag_grid: Vec<i32>,
+    grid: Vec<i32>,
+    sparse: HashMap<u64, u32>,
+}
+
+impl<S: Real> PairStorage<S> {
+    fn new(rows: usize, cols: usize, block_size: usize, diagonal: bool) -> Self {
+        Self {
+            rows,
+            cols,
+            block_size,
+            diagonal,
+            grid_ready: false,
+            coords: Vec::new(),
+            data: Vec::new(),
+            diag_grid: Vec::new(),
+            grid: Vec::new(),
+            sparse: HashMap::new(),
+        }
+    }
+
+    #[inline]
+    fn key(r: usize, c: usize) -> u64 {
+        ((r as u64) << 32) | c as u64
+    }
+
+    fn len(&self) -> usize {
+        self.coords.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.coords.is_empty()
+    }
+
+    /// Grow the block grid without touching existing blocks.
+    fn resize(&mut self, rows: usize, cols: usize) {
+        if rows <= self.rows && cols <= self.cols {
+            return;
+        }
+        self.rows = self.rows.max(rows);
+        self.cols = self.cols.max(cols);
+        if self.grid_ready {
+            self.rebuild_grids();
+        }
+    }
+
+    fn rebuild_grids(&mut self) {
+        self.diag_grid = if self.diagonal {
+            vec![-1; self.rows]
+        } else {
+            Vec::new()
+        };
+        self.grid.clear();
+        self.sparse.clear();
+        let has_off_diagonal = self.coords.iter().any(|&(r, c)| !(self.diagonal && r == c));
+        let cells = self.rows.saturating_mul(self.cols);
+        if has_off_diagonal && cells > 0 && cells <= MAX_DENSE_GRID {
+            self.grid = vec![-1; cells];
+        }
+        for (index, &(r, c)) in self.coords.iter().enumerate() {
+            let (r, c) = (r as usize, c as usize);
+            if self.diagonal && r == c {
+                if r < self.diag_grid.len() {
+                    self.diag_grid[r] = index as i32;
+                }
+            } else if !self.grid.is_empty() {
+                self.grid[r * self.cols + c] = index as i32;
+            } else {
+                self.sparse.insert(Self::key(r, c), index as u32);
+            }
+        }
+    }
+
+    /// Block index of `(r, c)`, if it exists.
+    fn index(&self, r: usize, c: usize) -> Option<usize> {
+        if r >= self.rows || c >= self.cols {
+            return None;
+        }
+        if self.diagonal && r == c {
+            let value = self.diag_grid.get(r).copied().unwrap_or(-1);
+            return (value >= 0).then_some(value as usize);
+        }
+        if !self.grid.is_empty() {
+            let value = self.grid[r * self.cols + c];
+            return (value >= 0).then_some(value as usize);
+        }
+        self.sparse.get(&Self::key(r, c)).map(|&v| v as usize)
+    }
+
+    /// Block data of `(r, c)`, if it exists.
+    fn get(&self, r: usize, c: usize) -> Option<&[S]> {
+        let index = self.index(r, c)?;
+        let start = index * self.block_size;
+        Some(&self.data[start..start + self.block_size])
+    }
+
+    /// Block data of `(r, c)`, creating a zero block when needed.
+    fn get_or_insert(&mut self, r: usize, c: usize) -> &mut [S] {
+        if let Some(index) = self.index(r, c) {
+            let start = index * self.block_size;
+            return &mut self.data[start..start + self.block_size];
+        }
+        if !self.grid_ready {
+            self.grid_ready = true;
+            self.rebuild_grids();
+        }
+        if r >= self.rows || c >= self.cols {
+            self.rows = self.rows.max(r + 1);
+            self.cols = self.cols.max(c + 1);
+            self.rebuild_grids();
+        }
+        let index = self.coords.len();
+        self.coords.push((r as u32, c as u32));
+        let start = index * self.block_size;
+        self.data.resize(start + self.block_size, S::zero());
+        if self.diagonal && r == c {
+            if r >= self.diag_grid.len() {
+                self.diag_grid.resize(r + 1, -1);
+            }
+            self.diag_grid[r] = index as i32;
+        } else if !self.grid.is_empty() {
+            self.grid[r * self.cols + c] = index as i32;
+        } else {
+            self.sparse.insert(Self::key(r, c), index as u32);
+        }
+        &mut self.data[start..start + self.block_size]
+    }
+
+    fn zero(&mut self) {
+        self.data.iter_mut().for_each(|v| *v = S::zero());
+    }
+
+    fn iter(&self) -> impl Iterator<Item = ((usize, usize), &[S])> {
+        self.coords
+            .iter()
+            .zip(self.data.chunks_exact(self.block_size))
+            .map(|(&(r, c), block)| ((r as usize, c as usize), block))
+    }
+
+    /// Block indices sorted by `(row, col)`, which yields sorted rows inside
+    /// each CSC column when converting to a scalar sparse matrix.
+    fn sorted_order(&self) -> Vec<u32> {
+        let mut order: Vec<u32> = (0..self.coords.len() as u32).collect();
+        if !self.coords.windows(2).all(|w| w[0] <= w[1]) {
+            order.sort_unstable_by_key(|&i| self.coords[i as usize]);
+        }
+        order
+    }
+
+    fn block_at(&self, index: usize) -> &[S] {
+        let start = index * self.block_size;
+        &self.data[start..start + self.block_size]
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = ((usize, usize), &mut [S])> {
+        let block_size = self.block_size;
+        self.coords
+            .iter()
+            .zip(self.data.chunks_exact_mut(block_size))
+            .map(|(&(r, c), block)| ((r as usize, c as usize), block))
+    }
+}
+
 /// Symmetric block-sparse matrix with compile-time block sizes.
 pub struct BlockSparseMat<T: BlockTypes, S: Real = f64> {
     sizes: &'static [usize],
     counts: Vec<usize>,
-    blocks: Vec<BTreeMap<(usize, usize), Vec<S>>>,
+    blocks: Vec<PairStorage<S>>,
     _marker: PhantomData<T>,
 }
 
@@ -97,6 +279,18 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         lo * nt - lo * lo.saturating_sub(1) / 2 + (hi - lo)
     }
 
+    fn pair_types(pair: usize) -> (usize, usize) {
+        let nt = Self::num_types();
+        for lo in 0..nt {
+            let span = nt - lo;
+            if pair < lo * nt - lo * lo.saturating_sub(1) / 2 + span {
+                let hi = lo + (pair - (lo * nt - lo * lo.saturating_sub(1) / 2));
+                return (lo, hi);
+            }
+        }
+        (nt - 1, nt - 1)
+    }
+
     fn type_index(size: usize) -> usize {
         T::SIZES
             .iter()
@@ -115,7 +309,12 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         Self {
             sizes: T::SIZES,
             counts: counts.to_vec(),
-            blocks: (0..Self::num_pairs()).map(|_| BTreeMap::new()).collect(),
+            blocks: (0..Self::num_pairs())
+                .map(|pair| {
+                    let (a, b) = Self::pair_types(pair);
+                    PairStorage::new(counts[a], counts[b], T::SIZES[a] * T::SIZES[b], a == b)
+                })
+                .collect(),
             _marker: PhantomData,
         }
     }
@@ -181,11 +380,10 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         );
         self.counts[ta] = self.counts[ta].max(r + 1);
         self.counts[tb] = self.counts[tb].max(c + 1);
-        let key = (r, c);
         let pair = Self::pair_index(ta, tb);
-        let data = self.blocks[pair]
-            .entry(key)
-            .or_insert_with(|| vec![S::zero(); R * C]);
+        let (rows, cols) = (self.counts[ta], self.counts[tb]);
+        self.blocks[pair].resize(rows, cols);
+        let data = self.blocks[pair].get_or_insert(r, c);
         BlockMut::from_data(data, R, C)
     }
 
@@ -199,10 +397,8 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
 
     /// Zero all blocks, keeping the structure.
     pub fn set_zero(&mut self) {
-        for map in &mut self.blocks {
-            for block in map.values_mut() {
-                block.iter_mut().for_each(|v| *v = S::zero());
-            }
+        for storage in &mut self.blocks {
+            storage.zero();
         }
     }
 
@@ -212,10 +408,12 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         for t in 0..Self::num_types() {
             let size = self.sizes[t];
             let pair = Self::pair_index(t, t);
-            for i in 0..self.counts[t] {
-                let block = self.blocks[pair]
-                    .entry((i, i))
-                    .or_insert_with(|| vec![S::zero(); size * size]);
+            let count = self.counts[t];
+            let storage = &mut self.blocks[pair];
+            storage.resize(count, count);
+            for i in 0..count {
+                let block = storage.get_or_insert(i, i);
+                block.iter_mut().for_each(|v| *v = S::zero());
                 for d in 0..size {
                     block[d * size + d] = S::one();
                 }
@@ -247,8 +445,7 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                 let pair = Self::pair_index(a, b);
                 let (ra, ca) = (self.sizes[a], self.sizes[b]);
                 let (oa, ob) = (offsets[a], offsets[b]);
-                let map = &mut self.blocks[pair];
-                for (&(r, c), block) in map.iter_mut() {
+                for ((r, c), block) in self.blocks[pair].iter_mut() {
                     let row_base = oa + r * ra;
                     let col_base = ob + c * ca;
                     for j in 0..ca {
@@ -279,7 +476,7 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
     pub fn is_all_finite(&self) -> bool {
         self.blocks
             .iter()
-            .all(|map| map.values().all(|b| b.iter().all(|v| v.is_finite())))
+            .all(|storage| storage.data.iter().all(|v| v.is_finite()))
     }
 
     /// Scalar coefficient `(i, j)`.
@@ -324,7 +521,7 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         } else {
             (Self::pair_index(ta, tb), (c, r), true)
         };
-        match self.blocks[pair].get(&key) {
+        match self.blocks[pair].get(key.0, key.1) {
             Some(block) => {
                 let rows = self.sizes[if ta <= tb { ta } else { tb }];
                 if transpose {
@@ -357,9 +554,8 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         };
         let rows = if ta < tb { ra } else { ca };
         let cols = if ta < tb { ca } else { ra };
-        let block = self.blocks[pair]
-            .entry(key)
-            .or_insert_with(|| vec![S::zero(); rows * cols]);
+        let block = self.blocks[pair].get_or_insert(key.0, key.1);
+        debug_assert_eq!(block.len(), rows * cols);
         let index = if transpose {
             li * rows + lj
         } else {
@@ -391,7 +587,7 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
     pub fn scale_diagonal(&mut self, factor: S) {
         for t in 0..Self::num_types() {
             let pair = Self::pair_index(t, t);
-            for (&(r, c), block) in self.blocks[pair].iter_mut() {
+            for ((r, c), block) in self.blocks[pair].iter_mut() {
                 if r == c {
                     block.iter_mut().for_each(|v| *v *= factor);
                 }
@@ -412,7 +608,7 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                 let pair = Self::pair_index(a, b);
                 let (ra, ca) = (self.sizes[a], self.sizes[b]);
                 let (oa, ob) = (offsets[a], offsets[b]);
-                for (&(r, c), block) in self.blocks[pair].iter_mut() {
+                for ((r, c), block) in self.blocks[pair].iter_mut() {
                     let row_base = oa + r * ra;
                     let col_base = ob + c * ca;
                     for j in 0..ca {
@@ -444,7 +640,7 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                 let pair = Self::pair_index(a, b);
                 let (ra, ca) = (self.sizes[a], self.sizes[b]);
                 let (oa, ob) = (offsets[a], offsets[b]);
-                for (&(r, c), block) in &self.blocks[pair] {
+                for ((r, c), block) in self.blocks[pair].iter() {
                     let row_base = oa + r * ra;
                     let col_base = ob + c * ca;
                     // A(ab) * x_b contributes to rows a.
@@ -504,7 +700,11 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                 let pair = Self::pair_index(a, b);
                 let (ra, ca) = (self.sizes[a], self.sizes[b]);
                 let (oa, ob) = (offsets[a], offsets[b]);
-                for (&(r, c), block) in &self.blocks[pair] {
+                let storage = &self.blocks[pair];
+                for index in storage.sorted_order() {
+                    let (r, c) = storage.coords[index as usize];
+                    let (r, c) = (r as usize, c as usize);
+                    let block = storage.block_at(index as usize);
                     let row_base = oa + r * ra;
                     let col_base = ob + c * ca;
                     for j in 0..ca {
@@ -535,7 +735,11 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
                 let pair = Self::pair_index(a, b);
                 let (ra, ca) = (self.sizes[a], self.sizes[b]);
                 let (oa, ob) = (offsets[a], offsets[b]);
-                for (&(r, c), block) in &self.blocks[pair] {
+                let storage = &self.blocks[pair];
+                for index in storage.sorted_order() {
+                    let (r, c) = storage.coords[index as usize];
+                    let (r, c) = (r as usize, c as usize);
+                    let block = storage.block_at(index as usize);
                     let row_base = oa + r * ra;
                     let col_base = ob + c * ca;
                     for j in 0..ca {
@@ -568,12 +772,12 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
 
     /// Number of allocated blocks.
     pub fn num_allocated_blocks(&self) -> usize {
-        self.blocks.iter().map(|m| m.len()).sum()
+        self.blocks.iter().map(PairStorage::len).sum()
     }
 
     /// Whether the matrix is empty.
     pub fn is_empty(&self) -> bool {
-        self.blocks.iter().all(|m| m.is_empty())
+        self.blocks.iter().all(PairStorage::is_empty)
     }
 
     /// Layout information `(sizes, counts)`.
@@ -774,8 +978,7 @@ fn inverse_block<S: Real>(block: &[S], size: usize, out: &mut [S]) -> bool {
 }
 
 /// Dense matrix-vector product with a column-major square block.
-fn block_mat_vec<S: Real>(m: &[S], v: &[S], size: usize) -> Vec<S> {
-    let mut out = vec![S::zero(); size];
+fn block_mat_vec_into<S: Real>(m: &[S], v: &[S], size: usize, out: &mut [S]) {
     for i in 0..size {
         let mut acc = S::zero();
         for j in 0..size {
@@ -783,7 +986,6 @@ fn block_mat_vec<S: Real>(m: &[S], v: &[S], size: usize) -> Vec<S> {
         }
         out[i] = acc;
     }
-    out
 }
 
 #[derive(Clone, Debug)]
@@ -824,6 +1026,12 @@ pub struct BlockSparseLdlt<T: BlockTypes, S: Real = f64> {
     coupling_data: Vec<S>,
     fallback: Option<SparseLinearSolvers<S>>,
     fallback_sparse: SparseMatrix<S>,
+    // Reusable scratch buffers (no allocation in the solve loop).
+    product: Vec<S>,
+    product2: Vec<S>,
+    ys: Vec<S>,
+    correction: Vec<S>,
+    solution: Vec<S>,
     _marker: PhantomData<T>,
 }
 
@@ -848,6 +1056,11 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             coupling_data: Vec::new(),
             fallback: None,
             fallback_sparse: SparseMatrix::new(0, 0),
+            product: Vec::new(),
+            product2: Vec::new(),
+            ys: Vec::new(),
+            correction: Vec::new(),
+            solution: Vec::new(),
             _marker: PhantomData,
         }
     }
@@ -870,18 +1083,20 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         };
         self.num_reduced = num_reduced;
         self.reduced_types = reduced_types;
-        self.schur = None;
+        // Keep the Schur buffer for reuse; `compute` overwrites it entirely.
+        self.computed = false;
         self.elims.clear();
         self.fallback = None;
 
         // Block Schur requires independent eliminated blocks.
         let independent = (reduced_types..h.num_block_types()).all(|a| {
             (a..h.num_block_types()).all(|b| {
-                let map = &h.blocks[Self::block_pair(a, b)];
-                if map.is_empty() {
+                let storage = &h.blocks[Self::block_pair(a, b)];
+                if storage.is_empty() {
                     return true;
                 }
-                a != b && map.is_empty() || (a == b && map.keys().all(|&(r, c)| r == c))
+                a != b && storage.is_empty()
+                    || (a == b && storage.coords.iter().all(|&(r, c)| r == c))
             })
         });
         self.analyzed = true;
@@ -917,20 +1132,25 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         let nr = self.num_reduced;
         let nt = T::SIZES.len();
         let rt = self.reduced_types;
-        let mut schur = vec![S::zero(); nr * nr];
+        let schur = self.schur.get_or_insert_with(|| vec![S::zero(); nr * nr]);
+        if schur.len() != nr * nr {
+            schur.resize(nr * nr, S::zero());
+        }
+        schur.fill(S::zero());
 
         // Reduced-reduced blocks (both triangles).
         for a in 0..rt {
             for b in a..rt {
                 let (ra, ca) = (T::SIZES[a], T::SIZES[b]);
                 let (oa, ob) = (h.base_offset(a), h.base_offset(b));
-                for (&(r, c), block) in &h.blocks[Self::block_pair(a, b)] {
+                let storage = &h.blocks[Self::block_pair(a, b)];
+                for ((r, c), block) in storage.iter() {
                     let (key, transpose) = if a == b && r > c {
                         ((c, r), true)
                     } else {
                         ((r, c), false)
                     };
-                    if let Some(data) = h.blocks[Self::block_pair(a, b)].get(&key) {
+                    if let Some(data) = storage.get(key.0, key.1) {
                         let rows = if transpose { ca } else { ra };
                         let row0 = oa + r * ra;
                         let col0 = ob + c * ca;
@@ -956,14 +1176,14 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         self.inverses.clear();
         self.couplings.clear();
         self.coupling_data.clear();
-        let mut product = Vec::new();
+        self.product.clear();
         for te in rt..nt {
             let k = T::SIZES[te];
             let base = h.base_offset(te);
             for be in 0..h.counts[te] {
                 let start = base + be * k;
                 let pair = Self::block_pair(te, te);
-                let Some(e) = h.blocks[pair].get(&(be, be)) else {
+                let Some(e) = h.blocks[pair].get(be, be) else {
                     return false;
                 };
                 let inv_start = self.inverses.len();
@@ -976,7 +1196,7 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
                     let rs = T::SIZES[tr];
                     let pair = Self::block_pair(tr, te);
                     for br in 0..h.counts[tr] {
-                        if let Some(c) = h.blocks[pair].get(&(br, be)) {
+                        if let Some(c) = h.blocks[pair].get(br, be) {
                             if c.iter().all(|v| *v == S::zero()) {
                                 continue;
                             }
@@ -997,23 +1217,50 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
                 for i in coupling_start..coupling_end {
                     let ci = &self.couplings[i];
                     let c0 = &self.coupling_data[ci.data_start..ci.data_start + ci.len];
-                    product.resize(ci.rows * k, S::zero());
-                    block_mat_mul_inv(c0, inv, ci.rows, k, &mut product);
-                    let t0 = &product;
+                    self.product.resize(ci.rows * k, S::zero());
+                    block_mat_mul_inv(c0, inv, ci.rows, k, &mut self.product);
+                    let t0 = &self.product;
                     for j in i..coupling_end {
                         let cj = &self.couplings[j];
                         let c1 = &self.coupling_data[cj.data_start..cj.data_start + cj.len];
+                        if accumulate_pair_tile(
+                            t0,
+                            c1,
+                            schur,
+                            ci.rows,
+                            cj.rows,
+                            k,
+                            ci.reduced_start,
+                            cj.reduced_start,
+                            nr,
+                        ) {
+                            continue;
+                        }
+                        // P = (C_i E^{-1})^T C_j = t0^T C_j (ci.rows x cj.rows),
+                        // accumulated contiguously before updating S.
+                        let p_len = ci.rows * cj.rows;
+                        let p = &mut self.product2;
+                        p.clear();
+                        p.resize(p_len, S::zero());
                         for a in 0..ci.rows {
+                            let row = &mut p[a * cj.rows..a * cj.rows + cj.rows];
+                            for q in 0..k {
+                                let t = t0[q * ci.rows + a];
+                                if t == S::zero() {
+                                    continue;
+                                }
+                                let c1q = &c1[q * cj.rows..q * cj.rows + cj.rows];
+                                for (value, c) in row.iter_mut().zip(c1q) {
+                                    *value += t * *c;
+                                }
+                            }
+                        }
+                        // Only the upper triangle is written here; the lower
+                        // one is mirrored once at the end.
+                        for a in 0..ci.rows {
+                            let row_a = (ci.reduced_start + a) * nr + cj.reduced_start;
                             for b in 0..cj.rows {
-                                let mut acc = S::zero();
-                                for q in 0..k {
-                                    acc += t0[q * ci.rows + a] * c1[q * cj.rows + b];
-                                }
-                                schur[(ci.reduced_start + a) * nr + cj.reduced_start + b] -= acc;
-                                if i != j {
-                                    schur[(cj.reduced_start + b) * nr + ci.reduced_start + a] -=
-                                        acc;
-                                }
+                                schur[row_a + b] -= p[a * cj.rows + b];
                             }
                         }
                     }
@@ -1028,18 +1275,29 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             }
         }
 
-        self.schur = Some(schur);
+        if nr > 0 {
+            for col in 1..nr {
+                for row in 0..col {
+                    schur[col * nr + row] = schur[row * nr + col];
+                }
+            }
+        }
         self.computed = true;
         true
     }
 
     /// Solve `H x = rhs` into `out`.
-    pub fn solve_into(&self, _h: &BlockSparseMat<T, S>, rhs: &[S], out: &mut [S]) -> bool {
+    pub fn solve_into(&mut self, _h: &BlockSparseMat<T, S>, rhs: &[S], out: &mut [S]) -> bool {
         if !self.computed {
             return false;
         }
-        if let Some(solver) = &self.fallback {
-            return match solver.solve(&self.fallback_sparse, rhs) {
+        let Self {
+            fallback,
+            fallback_sparse,
+            ..
+        } = self;
+        if let Some(solver) = fallback {
+            return match solver.solve(fallback_sparse, rhs) {
                 Some(x) => {
                     out.copy_from_slice(&x);
                     true
@@ -1049,41 +1307,61 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
         }
         match self.solve_rhs(rhs) {
             Some(x) => {
-                out.copy_from_slice(&x);
+                out.copy_from_slice(x);
                 true
             }
             None => false,
         }
     }
 
-    fn solve_rhs(&self, rhs: &[S]) -> Option<Vec<S>> {
+    fn solve_rhs(&mut self, rhs: &[S]) -> Option<&[S]> {
         let nr = self.num_reduced;
-        let schur = self.schur.as_ref()?;
+        let ne = rhs.len() - nr;
+        self.ys.clear();
+        self.ys.resize(ne, S::zero());
+        self.correction.clear();
+        self.correction.resize(ne, S::zero());
+        self.solution.clear();
+        self.solution.resize(rhs.len(), S::zero());
+
+        let Self {
+            schur,
+            elims,
+            inverses,
+            couplings,
+            coupling_data,
+            ys,
+            correction,
+            solution,
+            product,
+            ..
+        } = self;
+        let schur = schur.as_ref()?;
+
         let mut reduced_rhs = zeros_vector::<S, Dynamic>(nr);
         for (i, value) in rhs.iter().enumerate().take(nr) {
             reduced_rhs.set_at(i, *value);
         }
-        let ne = rhs.len() - nr;
-        let mut ys = vec![S::zero(); ne];
-        for e in &self.elims {
-            let inv = &self.inverses[e.inv_start..e.inv_start + e.size * e.size];
-            let y = block_mat_vec(inv, &rhs[e.start..e.start + e.size], e.size);
-            ys[e.start - nr..e.start - nr + e.size].copy_from_slice(&y);
-            for coupling in &self.couplings[e.coupling_start..e.coupling_end] {
-                let c =
-                    &self.coupling_data[coupling.data_start..coupling.data_start + coupling.len];
+
+        // Eliminated blocks: y = E^{-1} b and the reduced right-hand side.
+        for e in elims.iter() {
+            let inv = &inverses[e.inv_start..e.inv_start + e.size * e.size];
+            let y = &mut ys[e.start - nr..e.start - nr + e.size];
+            block_mat_vec_into(inv, &rhs[e.start..e.start + e.size], e.size, y);
+            for coupling in &couplings[e.coupling_start..e.coupling_end] {
+                let c = &coupling_data[coupling.data_start..coupling.data_start + coupling.len];
                 for i in 0..coupling.rows {
                     let mut acc = S::zero();
                     for j in 0..e.size {
                         acc += c[j * coupling.rows + i] * y[j];
                     }
-                    reduced_rhs.set_at(
-                        coupling.reduced_start + i,
-                        reduced_rhs.at(coupling.reduced_start + i) - acc,
-                    );
+                    let index = coupling.reduced_start + i;
+                    reduced_rhs.set_at(index, reduced_rhs.at(index) - acc);
                 }
             }
         }
+
+        // Dense reduced system.
         let mut dense = zeros_matrix::<S, Dynamic>(nr, nr);
         for j in 0..nr {
             for i in 0..nr {
@@ -1095,19 +1373,17 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             &dense,
             &reduced_rhs,
         )?;
-
-        let mut out = vec![S::zero(); rhs.len()];
-        for (i, value) in out.iter_mut().enumerate().take(nr) {
+        for (i, value) in solution.iter_mut().enumerate().take(nr) {
             *value = xr.at(i);
         }
-        let mut t = vec![S::zero(); ne];
-        for e in &self.elims {
+
+        // Back-substitution of the eliminated blocks.
+        for e in elims.iter() {
             let y = &ys[e.start - nr..e.start - nr + e.size];
-            let t = &mut t[e.start - nr..e.start - nr + e.size];
+            let t = &mut correction[e.start - nr..e.start - nr + e.size];
             t.fill(S::zero());
-            for coupling in &self.couplings[e.coupling_start..e.coupling_end] {
-                let c =
-                    &self.coupling_data[coupling.data_start..coupling.data_start + coupling.len];
+            for coupling in &couplings[e.coupling_start..e.coupling_end] {
+                let c = &coupling_data[coupling.data_start..coupling.data_start + coupling.len];
                 for j in 0..e.size {
                     let mut acc = S::zero();
                     for i in 0..coupling.rows {
@@ -1116,13 +1392,17 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
                     t[j] += acc;
                 }
             }
-            let inv = &self.inverses[e.inv_start..e.inv_start + e.size * e.size];
-            let corr = block_mat_vec(inv, t, e.size);
+            let inv = &inverses[e.inv_start..e.inv_start + e.size * e.size];
+            product.resize(e.size, S::zero());
+            block_mat_vec_into(inv, t, e.size, product);
             for j in 0..e.size {
-                out[e.start + j] = y[j] - corr[j];
+                solution[e.start + j] = y[j] - product[j];
             }
         }
-        out.iter().all(|v| v.is_finite()).then_some(out)
+        solution
+            .iter()
+            .all(|v| v.is_finite())
+            .then_some(solution.as_slice())
     }
 
     /// Inverse of the reduced Schur block (top-left block of `H⁻¹`).
@@ -1140,7 +1420,7 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
 
     /// Marginal covariance of one eliminated block (the matching block of `H⁻¹`).
     pub fn marginal_eliminated_block(
-        &self,
+        &mut self,
         elim_start: usize,
         elim_size: usize,
     ) -> Option<Matrix<S, Dynamic>> {
@@ -1190,6 +1470,71 @@ fn block_mat_mul_inv<S: Real>(c: &[S], inv: &[S], rows: usize, k: usize, out: &m
             out[q * rows + i] = acc;
         }
     }
+}
+
+/// Fixed-size Schur tile update `S -= (C1 E^-1)^T C2`.
+///
+/// The compile-time block sizes let LLVM unroll and vectorize the small
+/// matrix product, matching the C++ fixed-size Eigen expression.
+#[inline(always)]
+fn accumulate_pair_fixed<const R: usize, const C: usize, const K: usize, S: Real>(
+    t0: &[S],
+    c1: &[S],
+    schur: &mut [S],
+    row_start: usize,
+    col_start: usize,
+    nr: usize,
+) {
+    let mut p = [[S::zero(); C]; R];
+    for (a, row) in p.iter_mut().enumerate() {
+        for q in 0..K {
+            let t = t0[q * R + a];
+            if t == S::zero() {
+                continue;
+            }
+            let c1q = &c1[q * C..q * C + C];
+            for (value, c) in row.iter_mut().zip(c1q) {
+                *value += t * *c;
+            }
+        }
+    }
+    for (a, row) in p.iter().enumerate() {
+        let base = (row_start + a) * nr + col_start;
+        for (value, entry) in schur[base..base + C].iter_mut().zip(row) {
+            *value -= *entry;
+        }
+    }
+}
+
+/// Dispatch the fixed-size tile update for the usual block shapes.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn accumulate_pair_tile<S: Real>(
+    t0: &[S],
+    c1: &[S],
+    schur: &mut [S],
+    rows: usize,
+    cols: usize,
+    k: usize,
+    row_start: usize,
+    col_start: usize,
+    nr: usize,
+) -> bool {
+    match (rows, cols, k) {
+        (6, 6, 3) => accumulate_pair_fixed::<6, 6, 3, S>(t0, c1, schur, row_start, col_start, nr),
+        (6, 6, 1) => accumulate_pair_fixed::<6, 6, 1, S>(t0, c1, schur, row_start, col_start, nr),
+        (6, 6, 2) => accumulate_pair_fixed::<6, 6, 2, S>(t0, c1, schur, row_start, col_start, nr),
+        (6, 6, 6) => accumulate_pair_fixed::<6, 6, 6, S>(t0, c1, schur, row_start, col_start, nr),
+        (3, 3, 3) => accumulate_pair_fixed::<3, 3, 3, S>(t0, c1, schur, row_start, col_start, nr),
+        (3, 3, 2) => accumulate_pair_fixed::<3, 3, 2, S>(t0, c1, schur, row_start, col_start, nr),
+        (2, 2, 2) => accumulate_pair_fixed::<2, 2, 2, S>(t0, c1, schur, row_start, col_start, nr),
+        (2, 2, 3) => accumulate_pair_fixed::<2, 2, 3, S>(t0, c1, schur, row_start, col_start, nr),
+        (3, 3, 6) => accumulate_pair_fixed::<3, 3, 6, S>(t0, c1, schur, row_start, col_start, nr),
+        (6, 3, 3) => accumulate_pair_fixed::<6, 3, 3, S>(t0, c1, schur, row_start, col_start, nr),
+        (3, 6, 3) => accumulate_pair_fixed::<3, 6, 3, S>(t0, c1, schur, row_start, col_start, nr),
+        _ => return false,
+    }
+    true
 }
 
 // --- HessianStorage implementation -----------------------------------------

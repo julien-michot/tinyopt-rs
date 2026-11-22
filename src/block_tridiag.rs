@@ -46,27 +46,33 @@ impl<'a, S: Real> BlockMut<'a, S> {
     }
 
     /// `self += a * x * xᵀ`.
+    #[inline]
     pub fn add_outer_product_self(&mut self, a: S, x: &[S]) {
-        for (j, xj) in x.iter().enumerate().take(self.cols) {
+        let rows = self.rows;
+        let x = &x[..x.len().min(self.cols)];
+        for (column, xj) in self.data.chunks_exact_mut(rows).zip(x) {
             let ay = a * *xj;
             if ay == S::zero() {
                 continue;
             }
-            for (i, xi) in x.iter().enumerate().take(self.rows) {
-                self.data[j * self.rows + i] += ay * *xi;
+            for (value, xi) in column.iter_mut().zip(x) {
+                *value += ay * *xi;
             }
         }
     }
 
     /// `self += a * x * yᵀ`.
+    #[inline]
     pub fn add_outer_product(&mut self, a: S, x: &[S], y: &[S]) {
-        for (j, yj) in y.iter().enumerate().take(self.cols) {
+        let rows = self.rows;
+        let x = &x[..x.len().min(rows)];
+        for (column, yj) in self.data.chunks_exact_mut(rows).zip(y.iter()) {
             let ay = a * *yj;
             if ay == S::zero() {
                 continue;
             }
-            for (i, xi) in x.iter().enumerate().take(self.rows) {
-                self.data[j * self.rows + i] += ay * *xi;
+            for (value, xi) in column.iter_mut().zip(x) {
+                *value += ay * *xi;
             }
         }
     }

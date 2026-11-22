@@ -499,3 +499,86 @@ fn bundle_adjustment_layout_uses_the_block_schur() {
         assert_relative_eq!(a, e, epsilon = 1e-9);
     }
 }
+
+#[test]
+fn three_block_sizes_round_trip_and_solve() {
+    block_sparse_types!(ThreeTypes, [4, 3, 2]);
+    // Head type 4 (2 blocks), eliminated types 3 (3 blocks) and 2 (2 blocks).
+    // The eliminated types are mutually decoupled, so the block Schur is used.
+    let mut h = BlockSparseMat::<ThreeTypes, f64>::with_counts(&[2, 3, 2]);
+    let dims = h.dims();
+    assert_eq!(dims, 2 * 4 + 3 * 3 + 2 * 2);
+    let mut expected = Matrix::<f64, Dynamic>::zeros(dims, dims);
+    for i in 0..dims {
+        h.set_entry(i, i, 4.0);
+        expected.set_elem(i, i, 4.0);
+    }
+    // Coupling blocks (4, 3) and (4, 2), upper-triangle pairs only.
+    for cam in 0..2 {
+        for point in 0..3 {
+            let mut block = h.block_mut::<4, 3>(cam, point);
+            for i in 0..4 {
+                for j in 0..3 {
+                    let value = 0.1 * (cam + point + i + j) as f64 + 0.01;
+                    block.set_at(i, j, value);
+                    let row = cam * 4 + i;
+                    let col = 8 + point * 3 + j;
+                    expected.set_elem(row, col, value);
+                    expected.set_elem(col, row, value);
+                }
+            }
+        }
+        for extra in 0..2 {
+            let mut block = h.block_mut::<4, 2>(cam, extra);
+            for i in 0..4 {
+                for j in 0..2 {
+                    let value = -0.05 * (cam + extra + i + j) as f64 - 0.02;
+                    block.set_at(i, j, value);
+                    let row = cam * 4 + i;
+                    let col = 17 + extra * 2 + j;
+                    expected.set_elem(row, col, value);
+                    expected.set_elem(col, row, value);
+                }
+            }
+        }
+    }
+
+    // Scalar access and both conversions stay consistent.
+    for j in 0..dims {
+        for i in 0..dims {
+            assert_relative_eq!(h.get(i, j), expected.elem(i, j), epsilon = 1e-12);
+        }
+    }
+    let dense = h.to_dense();
+    let sparse = h.to_sparse();
+    for j in 0..dims {
+        for i in 0..dims {
+            assert_relative_eq!(dense.elem(i, j), expected.elem(i, j), epsilon = 1e-12);
+            assert_relative_eq!(sparse.coeff(i, j), expected.elem(i, j), epsilon = 1e-12);
+        }
+    }
+
+    // Block Schur solve (head = type 4) against the dense LDLT.
+    let rhs: Vec<f64> = (0..dims).map(|i| (i as f64) * 0.25 - 2.0).collect();
+    let mut ldlt = BlockSparseLdlt::<ThreeTypes, f64>::new();
+    assert!(ldlt.analyze(&h, 8));
+    assert!(ldlt.compute(&h));
+    assert!(ldlt.uses_block_schur());
+    let mut x = vec![0.0; dims];
+    assert!(ldlt.solve_into(&h, &rhs, &mut x));
+    let reference = tinyopt::backend::solve::<f64, Dynamic>(
+        tinyopt::backend::LinearSolverMethod::Ldlt,
+        &dense,
+        &{
+            let mut b = tinyopt::backend::zeros_vector::<f64, Dynamic>(dims);
+            for (i, v) in rhs.iter().enumerate() {
+                b.set_at(i, *v);
+            }
+            b
+        },
+    )
+    .unwrap();
+    for (value, expected) in x.iter().zip((0..dims).map(|i| reference.at(i))) {
+        assert_relative_eq!(*value, expected, epsilon = 1e-10);
+    }
+}
