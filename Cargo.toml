@@ -24,6 +24,9 @@ default = ["nalgebra", "autodiff"]
 nalgebra = ["dep:nalgebra", "solver-ldlt"]
 faer = ["dep:faer", "solver-ldlt"]
 
+# --- Optional external solvers ----------------------------------------------
+suitesparse = []
+
 # --- Differentiation --------------------------------------------------------
 autodiff = ["dep:num-dual", "dep:nalgebra"]
 numdiff = []
@@ -34,6 +37,9 @@ solver-llt = []
 solver-lu = []
 solver-qr = []
 solver-svd = []
+
+[build-dependencies]
+cc = "1"
 
 [dependencies]
 num-traits = "0.2"

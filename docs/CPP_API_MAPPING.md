@@ -153,10 +153,8 @@ impl RobustResidualsFn for Problem {
 | `tinyopt::Inverse(m)` | `tinyopt::inverse(&m)` |
 | `TINYOPT_ENABLE_LINEAR_SOLVER_*` | cargo features `solver-ldlt/llt/lu/qr/svd` |
 
-## Not ported (dense scope)
+## Not ported
 
-- Sparse, block-sparse, block-tridiagonal, and Schur complement paths.
-- SuiteSparse / CHOLMOD backends.
 - The C ABI (`c_api_*`) and wasm examples.
 - Sophus / Lie++ adapters (use `Params::plus_eq` or `ParamsWrapper` instead).
 - Eigen malloc guards (the zero-allocation test uses a counting allocator on the
@@ -176,7 +174,7 @@ impl RobustResidualsFn for Problem {
 | `SparseMatrix<Scalar>` (Eigen CSC) | `SparseMatrix<S>` (CSC, triplets, `coeff_ref`, lower/upper completion) |
 | `Eigen::SimplicialLDLT` | `SimplicialLdl` (elimination tree + left-looking LDLᵀ) |
 | `SparseLinearSolvers` | `SparseLinearSolvers` (analyze/compute/solve, scalar Schur) |
-| `LinearSolverMethod::SuiteSparse` | mapped to `Ldlt` (no CHOLMOD dependency) |
+| `LinearSolverMethod::SuiteSparse` | CHOLMOD with the `suitesparse` feature; otherwise (or with a Schur-reduced head block) the built-in sparse LDLᵀ |
 | `LinearSolverMethod::IncompleteCholesky` | mapped to `Ldlt` |
 | `BlockTridiagMat<B>` | `BlockTridiagMat<B>` (fixed block size) |
 | `BlockTridiagMatX` | `BlockTridiagMat<0, S>` / `BlockTridiagMatX<S>` |

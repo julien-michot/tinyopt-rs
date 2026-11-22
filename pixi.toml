@@ -9,6 +9,9 @@ platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
 [dependencies]
 rust = ">=1.85"
 
+[feature.suitesparse.dependencies]
+suitesparse = ">=7.10"
+
 [feature.bench.dependencies]
 cmake = "*"
 ninja = "*"
@@ -17,12 +20,14 @@ matplotlib = ">=3.8"
 
 [environments]
 bench = ["bench"]
+suitesparse = ["suitesparse"]
 
 [tasks]
 build = "cargo build --all-targets"
 test = "cargo test"
 test-nalgebra = "cargo test --no-default-features --features nalgebra"
 test-faer = "cargo test --no-default-features --features faer"
+test-suitesparse = { cmd = "cargo test --features suitesparse", default-environment = "suitesparse" }
 fmt = "cargo fmt --all -- --check && cargo fmt --manifest-path benchmarks/compare/Cargo.toml --all -- --check"
 clippy = "cargo clippy --all-targets -- -D warnings"
 doc = "cargo doc --no-deps"

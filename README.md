@@ -33,10 +33,23 @@ Default features are `nalgebra` + `autodiff`. Exactly one backend must be enable
 | `autodiff` | yes | forward-mode AD through `num-dual` (requires `nalgebra`) |
 | `numdiff` | no | central finite differences |
 | `solver-llt`, `solver-lu`, `solver-qr`, `solver-svd` | no | extra dense factorization methods |
+| `suitesparse` | no | optional CHOLMOD backend for scalar sparse solves (system SuiteSparse) |
 
 ```toml
 # faer backend without autodiff
 tinyopt = { version = "0.8", default-features = false, features = ["faer"] }
+```
+
+### Optional CHOLMOD backend
+
+Enable `suitesparse` to route scalar sparse systems (`LinearSolverMethod::SuiteSparse`)
+through CHOLMOD. The build script locates the headers and library via
+`CHOLMOD_INCLUDE_DIR` / `CHOLMOD_LIB_DIR`, a conda `CONDA_PREFIX`, or the usual
+`/opt/homebrew` and `/usr/local` prefixes. Systems with a Schur-reduced head block
+keep using the built-in sparse LDLᵀ path, mirroring the C++ dispatch.
+
+```shell
+cargo test --features suitesparse
 ```
 
 ## Quick start: manual accumulation

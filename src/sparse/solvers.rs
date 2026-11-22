@@ -8,6 +8,8 @@ use crate::options::LinearSolverOptions;
 use crate::real::Real;
 use crate::sparse::ldlt::SimplicialLdl;
 use crate::sparse::matrix::SparseMatrix;
+#[cfg(feature = "suitesparse")]
+use crate::sparse::suitesparse::CholmodSolver;
 
 /// Sparse linear solver with optional Schur-complement partitioning.
 ///
@@ -21,6 +23,8 @@ pub struct SparseLinearSolvers<S> {
     analyzed: bool,
     computed: bool,
     num_reduced: usize,
+    #[cfg(feature = "suitesparse")]
+    cholmod: Option<CholmodSolver<S>>,
 }
 
 impl<S: Real> Default for SparseLinearSolvers<S> {
@@ -108,6 +112,8 @@ impl<S: Real> SparseLinearSolvers<S> {
             analyzed: false,
             computed: false,
             num_reduced: 0,
+            #[cfg(feature = "suitesparse")]
+            cholmod: None,
         }
     }
 
@@ -118,6 +124,13 @@ impl<S: Real> SparseLinearSolvers<S> {
             self.options.method,
             LinearSolverMethod::Lu | LinearSolverMethod::Qr | LinearSolverMethod::Svd
         )
+    }
+
+    /// Whether CHOLMOD handles this system (SuiteSparse method, no Schur
+    /// partition). Mirrors the C++ dispatch.
+    #[cfg(feature = "suitesparse")]
+    fn uses_suitesparse(&self) -> bool {
+        matches!(self.options.method, LinearSolverMethod::SuiteSparse) && self.num_reduced == 0
     }
 
     /// Analyze the sparsity pattern of `h` with `num_reduced` head parameters.
@@ -133,6 +146,16 @@ impl<S: Real> SparseLinearSolvers<S> {
             return false;
         }
         self.num_reduced = num_reduced;
+        #[cfg(feature = "suitesparse")]
+        if self.uses_suitesparse() {
+            self.cholmod = CholmodSolver::new();
+            self.analyzed = match self.cholmod.as_mut() {
+                Some(cholmod) => cholmod.analyze(h),
+                None => false,
+            };
+            self.computed = false;
+            return self.analyzed;
+        }
         if self.uses_dense() {
             self.analyzed = true;
             self.computed = false;
@@ -151,6 +174,23 @@ impl<S: Real> SparseLinearSolvers<S> {
         if !self.analyzed {
             return false;
         }
+        #[cfg(feature = "suitesparse")]
+        if self.uses_suitesparse() {
+            // A cloned solver starts with an empty CHOLMOD context: re-analyze
+            // when the numeric factorization cannot reuse the symbolic one.
+            self.computed = match self.cholmod.as_ref() {
+                Some(cholmod) => cholmod.factorize(h),
+                None => false,
+            };
+            if !self.computed {
+                self.cholmod = CholmodSolver::new();
+                self.computed = match self.cholmod.as_mut() {
+                    Some(cholmod) => cholmod.analyze(h) && cholmod.factorize(h),
+                    None => false,
+                };
+            }
+            return self.computed;
+        }
         if self.uses_dense() {
             self.computed = true;
             return true;
@@ -166,6 +206,16 @@ impl<S: Real> SparseLinearSolvers<S> {
             return None;
         }
         let n = h.nrows();
+        #[cfg(feature = "suitesparse")]
+        if self.uses_suitesparse() {
+            let cholmod = self.cholmod.as_ref()?;
+            let mut x = vec![S::zero(); n];
+            return if cholmod.solve(rhs, &mut x) {
+                Some(x)
+            } else {
+                None
+            };
+        }
         if self.uses_dense() {
             let dense = h.to_dense();
             let mut b = crate::backend::zeros_vector::<S, Dynamic>(n);

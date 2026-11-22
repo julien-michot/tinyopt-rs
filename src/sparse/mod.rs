@@ -7,11 +7,15 @@ mod amd;
 mod ldlt;
 mod matrix;
 mod solvers;
+#[cfg(feature = "suitesparse")]
+mod suitesparse;
 
 pub use amd::minimum_degree;
 pub use ldlt::SimplicialLdl;
 pub use matrix::SparseMatrix;
 pub use solvers::{SparseLinearSolvers, SparseSolverCache};
+#[cfg(feature = "suitesparse")]
+pub use suitesparse::CholmodSolver;
 
 /// Double-precision sparse matrix (C++ `SparseMat`).
 pub type SparseMat = SparseMatrix<f64>;

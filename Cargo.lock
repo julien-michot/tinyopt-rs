@@ -1498,6 +1498,7 @@ name = "tinyopt"
 version = "0.8.0"
 dependencies = [
  "approx",
+ "cc",
  "criterion",
  "faer",
  "log",
