@@ -4,6 +4,7 @@
 //! Sparse matrices and solvers (dense-block/sparse parity with the C++ library).
 
 mod amd;
+mod ic;
 mod ldlt;
 mod matrix;
 mod solvers;
@@ -11,6 +12,7 @@ mod solvers;
 mod suitesparse;
 
 pub use amd::minimum_degree;
+pub use ic::IncompleteCholesky;
 pub use ldlt::SimplicialLdl;
 pub use matrix::SparseMatrix;
 pub use solvers::{SparseLinearSolvers, SparseSolverCache};

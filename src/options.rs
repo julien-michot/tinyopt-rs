@@ -21,6 +21,8 @@ pub enum Solver {
     ConjugateGradient,
     /// Dog-leg trust region.
     DogLeg,
+    /// Steihaug–Toint trust-region Newton-CG (Hessian-vector products only).
+    SteihaugToint,
     /// BFGS.
     Bfgs,
     /// L-BFGS.
@@ -66,6 +68,11 @@ pub struct LinearSolverOptions {
     pub ordering: Ordering,
     /// Initial shift applied when a factorization needs regularization.
     pub initial_shift: f64,
+    /// Relative residual tolerance of the preconditioned CG solver
+    /// (`IncompleteCholesky` method).
+    pub pcg_tolerance: f64,
+    /// Maximum number of preconditioned CG iterations.
+    pub pcg_max_iters: u32,
 }
 
 impl Default for LinearSolverOptions {
@@ -77,6 +84,8 @@ impl Default for LinearSolverOptions {
             reuse_symbolic: true,
             ordering: Ordering::Amd,
             initial_shift: 1e-3,
+            pcg_tolerance: 1e-8,
+            pcg_max_iters: 1000,
         }
     }
 }
@@ -379,6 +388,39 @@ impl Default for DlOptions {
     }
 }
 
+/// Steihaug–Toint trust-region options.
+#[derive(Clone, Debug)]
+pub struct TrustRegionOptions {
+    /// Initial trust-region radius.
+    pub radius_init: f32,
+    /// Maximum trust-region radius.
+    pub radius_max: f32,
+    /// Minimum trust-region radius.
+    pub radius_min: f32,
+    /// Radius shrink factor after a poor step.
+    pub shrink_factor: f32,
+    /// Radius expand factor after a good boundary step.
+    pub expand_factor: f32,
+    /// Maximum number of inner CG iterations.
+    pub max_cg_iters: u16,
+    /// Relative residual tolerance of the inner CG.
+    pub cg_tolerance: f32,
+}
+
+impl Default for TrustRegionOptions {
+    fn default() -> Self {
+        Self {
+            radius_init: 1.0,
+            radius_max: 1e8,
+            radius_min: 1e-12,
+            shrink_factor: 0.25,
+            expand_factor: 2.0,
+            max_cg_iters: 100,
+            cg_tolerance: 1e-8,
+        }
+    }
+}
+
 /// BFGS / L-BFGS options.
 #[derive(Clone, Debug)]
 pub struct QuasiNewtonOptions {
@@ -433,6 +475,8 @@ pub struct Options {
     pub cg: CgOptions,
     /// Dog-leg options.
     pub dl: DlOptions,
+    /// Steihaug–Toint trust-region options.
+    pub tr: TrustRegionOptions,
     /// BFGS options.
     pub bfgs: QuasiNewtonOptions,
     /// L-BFGS options.
@@ -462,6 +506,7 @@ impl Options {
             gd: GdOptions::default(),
             cg: CgOptions::default(),
             dl: DlOptions::default(),
+            tr: TrustRegionOptions::default(),
             bfgs: QuasiNewtonOptions::default(),
             lbfgs: QuasiNewtonOptions::default(),
         }

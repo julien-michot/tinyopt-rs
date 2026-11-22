@@ -13,6 +13,7 @@ pub mod lbfgs;
 pub mod lm;
 #[allow(clippy::module_inception)]
 pub mod optimizer;
+pub mod trcg;
 
 pub use fixed::FixedSet;
 pub use optimizer::AccumulationFn;

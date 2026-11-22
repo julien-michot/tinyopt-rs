@@ -9,7 +9,7 @@ use crate::block_tridiag::BlockTridiagMat;
 use crate::cost::Cost;
 use crate::hessian::HessianStorage;
 use crate::optimizers::AccumulationFn;
-use crate::optimizers::{bfgs, cg, dl, gd, gn, lbfgs, lm};
+use crate::optimizers::{bfgs, cg, dl, gd, gn, lbfgs, lm, trcg};
 use crate::options::{Options, Solver};
 use crate::params::Params;
 use crate::params_pack::ParamsPack;
@@ -37,6 +37,7 @@ where
         Solver::GradientDescent => gd::Optimizer::<P>::new(options.clone()).optimize(x, f),
         Solver::ConjugateGradient => cg::Optimizer::<P>::new(options.clone()).optimize(x, f),
         Solver::DogLeg => dl::Optimizer::<P>::new(options.clone()).optimize(x, f),
+        Solver::SteihaugToint => trcg::Optimizer::<P>::new(options.clone()).optimize(x, f),
         Solver::Bfgs => bfgs::Optimizer::<P>::new(options.clone()).optimize(x, f),
         Solver::Lbfgs => lbfgs::Optimizer::<P>::new(options.clone()).optimize(x, f),
     }
@@ -98,6 +99,9 @@ where
         Solver::DogLeg => {
             dl::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
         }
+        Solver::SteihaugToint => {
+            trcg::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
         Solver::GradientDescent => {
             gd::Optimizer::<P, BlockSparseMat<T, P::Scalar>>::new(options.clone()).optimize(x, f)
         }
@@ -128,6 +132,9 @@ where
         }
         Solver::DogLeg => {
             dl::Optimizer::<P, BlockTridiagMat<B, P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::SteihaugToint => {
+            trcg::Optimizer::<P, BlockTridiagMat<B, P::Scalar>>::new(options.clone()).optimize(x, f)
         }
         Solver::GradientDescent => {
             gd::Optimizer::<P, BlockTridiagMat<B, P::Scalar>>::new(options.clone()).optimize(x, f)
@@ -161,6 +168,9 @@ where
         }
         Solver::DogLeg => {
             dl::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
+        }
+        Solver::SteihaugToint => {
+            trcg::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)
         }
         Solver::GradientDescent => {
             gd::Optimizer::<P, SparseMatrix<P::Scalar>>::new(options.clone()).optimize(x, f)

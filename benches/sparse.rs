@@ -12,9 +12,9 @@ use tinyopt::backend::{DenseVector, Dynamic, Vector};
 use tinyopt::block_sparse::BlockSparseMat;
 use tinyopt::block_sparse_types;
 use tinyopt::block_tridiag::BlockTridiagMat;
-use tinyopt::optimizers::lm;
+use tinyopt::optimizers::{lm, trcg};
 use tinyopt::sparse::SparseMat;
-use tinyopt::{Cost, Options, Ordering, Params, optimize_tridiag};
+use tinyopt::{Cost, Options, Ordering, Params, Solver, optimize_tridiag};
 
 type Vx = Vector<f64, Dynamic>;
 
@@ -519,6 +519,88 @@ fn sparse_solve_schur(c: &mut Criterion) {
     group.finish();
 }
 
+/// 2-D 5-point Laplacian grid (SPD), used by the linear-solver benchmarks.
+fn grid_spd(n: usize) -> tinyopt::sparse::SparseMatrix<f64> {
+    let mut triplets = Vec::new();
+    for i in 0..n {
+        for j in 0..n {
+            let k = i * n + j;
+            triplets.push((k, k, 4.0));
+            if i + 1 < n {
+                triplets.push((k, k + n, -1.0));
+                triplets.push((k + n, k, -1.0));
+            }
+            if j + 1 < n {
+                triplets.push((k, k + 1, -1.0));
+                triplets.push((k + 1, k, -1.0));
+            }
+        }
+    }
+    tinyopt::sparse::SparseMatrix::from_triplets(n * n, n * n, &triplets)
+}
+
+/// Steihaug–Toint trust-region Newton-CG against Levenberg-Marquardt.
+fn trust_region_cg(c: &mut Criterion) {
+    use tinyopt::sparse::SparseMat;
+    for dims in [100usize, 1000] {
+        let acc = sparse_chain_acc(dims);
+        let mut lm_options = options();
+        lm_options.solver_type = Solver::LevenbergMarquardt;
+        let mut lm_optimizer = lm::Optimizer::<Vec<f64>, SparseMat>::new(lm_options);
+        c.bench_function(&format!("solver_chain/{dims}D/lm"), |b| {
+            b.iter(|| {
+                let mut x = vec![0.0; dims];
+                let summary = lm_optimizer.optimize(&mut x, &acc);
+                std::hint::black_box(summary.final_cost.cost)
+            })
+        });
+
+        let mut trcg_options = options();
+        trcg_options.solver_type = Solver::SteihaugToint;
+        let mut trcg_optimizer = trcg::Optimizer::<Vec<f64>, SparseMat>::new(trcg_options);
+        c.bench_function(&format!("solver_chain/{dims}D/trcg"), |b| {
+            b.iter(|| {
+                let mut x = vec![0.0; dims];
+                let summary = trcg_optimizer.optimize(&mut x, &acc);
+                std::hint::black_box(summary.final_cost.cost)
+            })
+        });
+    }
+}
+
+/// IC(0) preconditioned CG against the direct sparse LDLᵀ.
+fn sparse_solve_ic(c: &mut Criterion) {
+    use tinyopt::backend::LinearSolverMethod;
+    use tinyopt::options::LinearSolverOptions;
+    use tinyopt::sparse::SparseLinearSolvers;
+
+    let mut group = c.benchmark_group("sparse_solve_ic");
+    group.sample_size(20);
+    for (label, n) in [("grid20", 20usize), ("grid40", 40)] {
+        let a = grid_spd(n);
+        let dims = a.nrows();
+        let b: Vec<f64> = (0..dims).map(|i| ((i as f64 * 7.0) % 13.0) - 6.0).collect();
+        for (name, method) in [
+            ("ldlt", LinearSolverMethod::Ldlt),
+            ("icpcg", LinearSolverMethod::IncompleteCholesky),
+        ] {
+            let options = LinearSolverOptions {
+                method,
+                ..Default::default()
+            };
+            let mut solver = SparseLinearSolvers::<f64>::new(options);
+            assert!(solver.analyze(&a, 0));
+            group.bench_function(format!("{label}/{name}"), |bench| {
+                bench.iter(|| {
+                    assert!(solver.compute(&a));
+                    std::hint::black_box(solver.solve(&a, &b).unwrap())
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
 #[cfg(feature = "suitesparse")]
 criterion_group!(
     benches,
@@ -529,7 +611,9 @@ criterion_group!(
     sparse_ordering,
     sparse_solver_cholmod,
     sparse_optimizer_cholmod,
-    sparse_solve_schur
+    sparse_solve_schur,
+    trust_region_cg,
+    sparse_solve_ic
 );
 
 #[cfg(not(feature = "suitesparse"))]
@@ -539,6 +623,8 @@ criterion_group!(
     sparse_chain_orderings,
     tridiag_chain,
     block_sparse_ba,
-    sparse_ordering
+    sparse_ordering,
+    trust_region_cg,
+    sparse_solve_ic
 );
 criterion_main!(benches);

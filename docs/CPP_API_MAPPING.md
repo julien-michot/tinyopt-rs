@@ -160,6 +160,13 @@ impl RobustResidualsFn for Problem {
 - Eigen malloc guards (the zero-allocation test uses a counting allocator on the
   nalgebra backend).
 
+## Rust-first extensions
+
+These have no C++ counterpart yet:
+
+- Box bounds via `Params::bounds` (active-set projection, all Hessian storages).
+- `Solver::SteihaugToint` — trust-region Newton-CG (Hessian-vector products).
+
 ## Backend notes
 
 - `nalgebra` (default): static (`Static<N>`) and dynamic (`Dynamic`) sizes.
@@ -175,7 +182,7 @@ impl RobustResidualsFn for Problem {
 | `Eigen::SimplicialLDLT` | `SimplicialLdl` (elimination tree + left-looking LDLᵀ) |
 | `SparseLinearSolvers` | `SparseLinearSolvers` (analyze/compute/solve, scalar Schur) |
 | `LinearSolverMethod::SuiteSparse` | CHOLMOD with the `suitesparse` feature (including the Schur eliminated block); otherwise the built-in sparse LDLᵀ |
-| `LinearSolverMethod::IncompleteCholesky` | mapped to `Ldlt` |
+| `LinearSolverMethod::IncompleteCholesky` | `IncompleteCholesky` (IC(0) factor + preconditioned CG) |
 | `BlockTridiagMat<B>` | `BlockTridiagMat<B>` (fixed block size) |
 | `BlockTridiagMatX` | `BlockTridiagMat<0, S>` / `BlockTridiagMatX<S>` |
 | `BlockTridiagLDLT` | `BlockTridiagLdlt` (Thomas + Takahashi inverse) |

@@ -67,6 +67,20 @@ within noise on bundle adjustment, where accumulation dominates. Solver-level
 benchmarks (`cargo bench --bench sparse --features suitesparse`) show 1.7-2.8x
 faster refactorize + solve, and up to 11x faster cold solves on large 2-D grids.
 
+## Solver choice (sparse chain)
+
+| Size | Levenberg-Marquardt | Steihaug–Toint (Newton-CG) |
+|---|---:|---:|
+| 100D | 83 µs | 65 µs |
+| 1000D | 2.32 ms | 1.35 ms |
+
+Newton-CG only needs Hessian-vector products, so it avoids forming and
+factorizing the normal equations; it wins on the chain problems and scales
+better with dimension. `LinearSolverMethod::IncompleteCholesky` provides an
+IC(0)-preconditioned CG solver; it is an *iterative* option, so the direct
+sparse LDLᵀ is still faster on small and medium systems and IC-PCG is meant for
+very large problems where the factorization dominates memory.
+
 ## Block-tridiagonal chains (fixed 6x6 blocks)
 
 | Blocks | tinyopt-rs | Ceres (sparse normal equations) |

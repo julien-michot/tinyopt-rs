@@ -258,6 +258,41 @@ let acc = |x, grad, h: Option<&mut BlockTridiagMat<6, f64>>| {
 let summary = tinyopt::optimize_tridiag::<6, _, _>(&mut x, acc, &options);
 ```
 
+### Box bounds
+
+Return a `Bounds` from `Params::bounds` to constrain the parameters to
+`lower <= x <= upper`:
+
+```rust
+impl Params for MyParams {
+    // ...
+    fn bounds(&self) -> Option<tinyopt::Bounds<f64>> {
+        Some(tinyopt::Bounds::from_slices(&self.lower, &self.upper))
+    }
+}
+```
+
+The optimizer projects each trial step into the box, masks the coordinates that
+sit on an active bound with a gradient pushing outward, and stops on the
+projected gradient. Bounds assume an additive `plus_eq` (Euclidean parameters).
+
+Bounds are storage-agnostic: they work with dense, sparse, block-sparse and
+block-tridiagonal Hessians, with or without a Schur-reduced head block. Two
+caveats: with a line search the trial points may leave the box (the accepted
+step is projected), and covariance export only zeroes the explicit
+`Params::fixed` indices, not the variables held by an active bound.
+
+### Trust-region Newton-CG
+
+`Solver::SteihaugToint` solves the trust-region subproblem with inner conjugate
+gradients and only needs Hessian-vector products, which makes it a good fit for
+large sparse or matrix-free systems:
+
+```rust
+let mut options = tinyopt::Options::new(tinyopt::Solver::SteihaugToint);
+options.tr.max_cg_iters = 50;
+```
+
 For compile-time block-sparse problems, declare the block types first. Any
 number of block sizes is supported (for example `[6, 3, 2]` or `[6, 4, 3, 2]`);
 the declaration order is the type order and `block_mut::<R, C>` expects the

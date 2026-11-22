@@ -6,6 +6,7 @@
 use crate::backend::{DenseMatrix, DenseVector, Dynamic, LinearSolverMethod, solve, zeros_vector};
 use crate::options::LinearSolverOptions;
 use crate::real::Real;
+use crate::sparse::ic::{IncompleteCholesky, symmetric_mul_vec_into};
 use crate::sparse::ldlt::SimplicialLdl;
 use crate::sparse::matrix::SparseMatrix;
 #[cfg(feature = "suitesparse")]
@@ -25,6 +26,12 @@ pub struct SparseLinearSolvers<S> {
     /// Whether the lower triangle is complete, so values can be refreshed
     /// without rebuilding the pattern.
     refresh_ok: bool,
+    /// IC(0) preconditioner for `LinearSolverMethod::IncompleteCholesky`.
+    ic: IncompleteCholesky<S>,
+    pcg_r: Vec<S>,
+    pcg_z: Vec<S>,
+    pcg_p: Vec<S>,
+    pcg_ap: Vec<S>,
     analyzed: bool,
     computed: bool,
     num_reduced: usize,
@@ -116,12 +123,22 @@ impl<S: Real> SparseLinearSolvers<S> {
             ldlt: SimplicialLdl::new(),
             eliminated: SparseMatrix::new(0, 0),
             refresh_ok: false,
+            ic: IncompleteCholesky::new(),
+            pcg_r: Vec::new(),
+            pcg_z: Vec::new(),
+            pcg_p: Vec::new(),
+            pcg_ap: Vec::new(),
             analyzed: false,
             computed: false,
             num_reduced: 0,
             #[cfg(feature = "suitesparse")]
             cholmod: None,
         }
+    }
+
+    /// Whether the method is the IC(0) preconditioned CG solver.
+    fn uses_ic(&self) -> bool {
+        matches!(self.options.method, LinearSolverMethod::IncompleteCholesky)
     }
 
     /// Whether the configured method factorizes the dense conversion instead
@@ -141,7 +158,10 @@ impl<S: Real> SparseLinearSolvers<S> {
     }
 
     /// Solve the eliminated block into `out`, reusing the caller's buffer.
-    fn solve_eliminated_into(&self, rhs: &[S], out: &mut [S]) -> bool {
+    fn solve_eliminated_into(&mut self, rhs: &[S], out: &mut [S]) -> bool {
+        if self.uses_ic() {
+            return self.solve_pcg(rhs, out);
+        }
         #[cfg(feature = "suitesparse")]
         if self.uses_cholmod() {
             let Some(cholmod) = self.cholmod.as_ref() else {
@@ -152,20 +172,69 @@ impl<S: Real> SparseLinearSolvers<S> {
         self.ldlt.solve_into(rhs, out)
     }
 
+    /// Preconditioned conjugate gradient with the IC(0) factor.
+    fn solve_pcg(&mut self, rhs: &[S], out: &mut [S]) -> bool {
+        let n = rhs.len();
+        if !self.ic.is_computed() || self.ic.dims() != n || out.len() != n {
+            return false;
+        }
+        out.fill(S::zero());
+        let rhs_norm2 = dot(rhs, rhs);
+        if rhs_norm2 == S::zero() {
+            return true;
+        }
+        let tolerance = S::from_f64(self.options.pcg_tolerance).expect("tolerance fits");
+        let stop = tolerance * tolerance * rhs_norm2;
+        let max_iters = self.options.pcg_max_iters as usize;
+
+        self.pcg_r.clear();
+        self.pcg_r.extend_from_slice(rhs);
+        self.pcg_z.resize(n, S::zero());
+        self.pcg_p.resize(n, S::zero());
+        self.pcg_ap.resize(n, S::zero());
+        self.ic.apply(&self.pcg_r, &mut self.pcg_z);
+        self.pcg_p.copy_from_slice(&self.pcg_z);
+        let mut rz = dot(&self.pcg_r, &self.pcg_z);
+
+        for _ in 0..max_iters {
+            symmetric_mul_vec_into(&self.eliminated, &self.pcg_p, &mut self.pcg_ap);
+            let pap = dot(&self.pcg_p, &self.pcg_ap);
+            if pap <= S::zero() || !pap.is_finite() {
+                return false;
+            }
+            let alpha = rz / pap;
+            for (x, p) in out.iter_mut().zip(&self.pcg_p) {
+                *x += alpha * *p;
+            }
+            for (r, ap) in self.pcg_r.iter_mut().zip(&self.pcg_ap) {
+                *r -= alpha * *ap;
+            }
+            if dot(&self.pcg_r, &self.pcg_r) <= stop {
+                return true;
+            }
+            self.ic.apply(&self.pcg_r, &mut self.pcg_z);
+            let rz_new = dot(&self.pcg_r, &self.pcg_z);
+            if rz_new <= S::zero() || !rz_new.is_finite() {
+                return false;
+            }
+            let beta = rz_new / rz;
+            for (p, z) in self.pcg_p.iter_mut().zip(&self.pcg_z) {
+                *p = *z + beta * *p;
+            }
+            rz = rz_new;
+        }
+        self.pcg_r.iter().all(|v| v.is_finite())
+    }
+
     /// Solve the eliminated block (full matrix when there is no Schur
     /// partition) through the configured sparse backend.
-    fn solve_eliminated(&self, rhs: &[S]) -> Option<Vec<S>> {
-        #[cfg(feature = "suitesparse")]
-        if self.uses_cholmod() {
-            let cholmod = self.cholmod.as_ref()?;
-            let mut x = vec![S::zero(); rhs.len()];
-            return if cholmod.solve(rhs, &mut x) {
-                Some(x)
-            } else {
-                None
-            };
+    fn solve_eliminated(&mut self, rhs: &[S]) -> Option<Vec<S>> {
+        let mut x = vec![S::zero(); rhs.len()];
+        if self.solve_eliminated_into(rhs, &mut x) {
+            Some(x)
+        } else {
+            None
         }
-        self.ldlt.solve(rhs)
     }
 
     /// Analyze the sparsity pattern of `h` with `num_reduced` head parameters.
@@ -211,9 +280,12 @@ impl<S: Real> SparseLinearSolvers<S> {
             .map(|j| h.column(j).filter(|&(i, _)| i >= j).count())
             .sum();
         self.refresh_ok = lower_count == self.eliminated.values().len();
-        self.analyzed = self
-            .ldlt
-            .analyze_pattern_with(&self.eliminated, self.options.ordering);
+        self.analyzed = if self.uses_ic() {
+            true
+        } else {
+            self.ldlt
+                .analyze_pattern_with(&self.eliminated, self.options.ordering)
+        };
         self.computed = false;
         self.analyzed
     }
@@ -259,16 +331,23 @@ impl<S: Real> SparseLinearSolvers<S> {
                 .refresh_lower_block_from(h, self.num_reduced);
         if !reused {
             self.eliminated = self.eliminated_block(h, self.num_reduced).to_lower();
-            self.analyzed = self
-                .ldlt
-                .analyze_pattern_with(&self.eliminated, self.options.ordering);
+            self.analyzed = if self.uses_ic() {
+                true
+            } else {
+                self.ldlt
+                    .analyze_pattern_with(&self.eliminated, self.options.ordering)
+            };
         }
-        self.computed = self.analyzed && self.ldlt.factorize(&self.eliminated);
+        self.computed = if self.uses_ic() {
+            self.ic.compute(&self.eliminated)
+        } else {
+            self.analyzed && self.ldlt.factorize(&self.eliminated)
+        };
         self.computed
     }
 
     /// Solve `H x = rhs` using the cached factorization.
-    pub fn solve(&self, h: &SparseMatrix<S>, rhs: &[S]) -> Option<Vec<S>> {
+    pub fn solve(&mut self, h: &SparseMatrix<S>, rhs: &[S]) -> Option<Vec<S>> {
         if !self.computed || self.num_reduced == usize::MAX || rhs.len() != h.nrows() {
             return None;
         }
@@ -288,7 +367,7 @@ impl<S: Real> SparseLinearSolvers<S> {
         }
         let nr = self.num_reduced;
         if nr == 0 {
-            return self.ldlt.solve(rhs);
+            return self.solve_eliminated(rhs);
         }
 
         let ne = n - nr;
@@ -356,7 +435,7 @@ impl<S: Real> SparseLinearSolvers<S> {
     }
 
     /// Dense inverse of `h` (as a sparse matrix with a dense pattern).
-    pub fn inverse(&self, h: &SparseMatrix<S>) -> Option<SparseMatrix<S>> {
+    pub fn inverse(&mut self, h: &SparseMatrix<S>) -> Option<SparseMatrix<S>> {
         let n = h.nrows();
         let mut triplets = Vec::with_capacity(n * n);
         let mut e = vec![S::zero(); n];
@@ -395,4 +474,9 @@ impl<S: Real> SparseLinearSolvers<S> {
         let n = h.nrows();
         h.submatrix(num_reduced, n, num_reduced, n)
     }
+}
+
+/// Dot product of two slices.
+fn dot<S: Real>(a: &[S], b: &[S]) -> S {
+    a.iter().zip(b).fold(S::zero(), |acc, (x, y)| acc + *x * *y)
 }

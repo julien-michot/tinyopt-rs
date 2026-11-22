@@ -8,12 +8,16 @@ follows the same *accumulation pattern*: you accumulate the gradient `Jᵀr` and
 Hessian approximation `JᵀJ` directly into the linear system, without materializing
 residual or Jacobian buffers.
 
-- Solvers: Levenberg-Marquardt (default), Gauss-Newton, Dog-Leg, gradient descent,
-  conjugate gradient, BFGS and L-BFGS, with optional line search.
+- Solvers: Levenberg-Marquardt (default), Gauss-Newton, Dog-Leg, Steihaug–Toint
+  trust-region Newton-CG, gradient descent, conjugate gradient, BFGS and L-BFGS,
+  with optional line search.
 - Differentiation: forward-mode autodiff (`num-dual`), numerical differentiation and
   analytical derivatives through the accumulation functions.
-- Fixed parameters, Schur complement (reduced parameters), covariance export, robust
-  losses, custom parameter types and manifold retractions.
+- Fixed parameters, box bounds (active-set projection), Schur complement (reduced
+  parameters), covariance export, robust losses, custom parameter types and
+  manifold retractions.
+- Linear solvers: dense LDLT/LLT/LU/QR/SVD, sparse LDLT (AMD), CHOLMOD (optional)
+  and IC(0)-preconditioned CG.
 - Backends: [`nalgebra`](https://crates.io/crates/nalgebra) (static + dynamic) or
   [`faer`](https://crates.io/crates/faer) (dynamic).
 
@@ -132,10 +136,40 @@ let options = Options::new(Solver::GaussNewton);
 | `LevenbergMarquardt` (default) | `optimizers::lm` | damped NLLS, adaptive `λ` |
 | `GaussNewton` | `optimizers::gn` | no damping |
 | `DogLeg` | `optimizers::dl` | trust region |
+| `SteihaugToint` | `optimizers::trcg` | trust-region Newton-CG (Hessian-vector products) |
 | `GradientDescent` | `optimizers::gd` | first order, learning rate |
 | `ConjugateGradient` | `optimizers::cg` | first order |
 | `Bfgs` | `optimizers::bfgs` | quasi-Newton |
 | `Lbfgs` | `optimizers::lbfgs` | limited-memory quasi-Newton |
+
+Any parameter type can expose box bounds through `Params::bounds`; the optimizer
+then projects the step and treats variables blocked by an active bound as fixed:
+
+```rust
+use tinyopt::{Bounds, Dynamic, Params};
+
+struct Bounded {
+    values: Vec<f64>,
+    lower: Vec<f64>,
+    upper: Vec<f64>,
+}
+
+impl Params for Bounded {
+    type Scalar = f64;
+    type Dim = Dynamic;
+
+    fn dims(&self) -> usize { self.values.len() }
+    fn as_slice(&self) -> &[f64] { &self.values }
+    fn plus_eq(&mut self, delta: &[f64]) {
+        for (value, d) in self.values.iter_mut().zip(delta) { *value += d; }
+    }
+    fn norm2(&self) -> f64 { self.values.iter().map(|v| v * v).sum() }
+
+    fn bounds(&self) -> Option<Bounds<f64>> {
+        Some(Bounds::from_slices(&self.lower, &self.upper))
+    }
+}
+```
 
 `solver_type` also selects the algorithm in the free functions
 (`optimize`, `optimize_sparse`, ...). Use an optimizer object to reuse buffers,
