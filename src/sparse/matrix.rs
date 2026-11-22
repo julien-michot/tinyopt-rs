@@ -200,6 +200,39 @@ impl<S: Real> SparseMatrix<S> {
         }
     }
 
+    /// Refresh the values of a stored lower-triangle block from `h`, without
+    /// recomputing the pattern.
+    ///
+    /// `self` must hold the lower triangle of `h[start.., start..]` (built by
+    /// `submatrix(...).to_lower()`); returns false when the pattern has
+    /// changed or when `h` has upper-only entries that need mirroring.
+    pub fn refresh_lower_block_from(&mut self, h: &SparseMatrix<S>, start: usize) -> bool {
+        let n = h.nrows();
+        if start >= n || self.nrows != n - start || self.ncols != n - start {
+            return false;
+        }
+        let mut p = 0usize;
+        for j in start..n {
+            let col = j - start;
+            let (lo, hi) = (h.col_ptrs[j], h.col_ptrs[j + 1]);
+            for q in lo..hi {
+                let i = h.row_indices[q];
+                if i < j {
+                    continue;
+                }
+                if p >= self.row_indices.len() || self.row_indices[p] != i - start {
+                    return false;
+                }
+                self.values[p] = h.values[q];
+                p += 1;
+            }
+            if self.col_ptrs[col + 1] != p {
+                return false;
+            }
+        }
+        p == self.row_indices.len()
+    }
+
     /// Set a coefficient (inserting or overwriting).
     pub fn set_coeff(&mut self, i: usize, j: usize, value: S) {
         *self.coeff_ref(i, j) = value;

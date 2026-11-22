@@ -225,3 +225,32 @@ fn sparse_solver_cache_reuses_and_invalidates() {
         assert_relative_eq!(x, e, epsilon = 1e-10);
     }
 }
+
+#[test]
+fn lower_block_refresh_tracks_values() {
+    let a = chain_spd(6);
+    let mut lower = a.submatrix(2, 6, 2, 6).to_lower();
+
+    // Scale the existing entries (same pattern) and refresh the values.
+    let mut b = a.clone();
+    for j in 0..6 {
+        for i in 0..6 {
+            let value = b.coeff(i, j);
+            if value != 0.0 {
+                b.set_coeff(i, j, value * 2.0);
+            }
+        }
+    }
+    assert!(lower.refresh_lower_block_from(&b, 2));
+    let expected = b.submatrix(2, 6, 2, 6).to_lower();
+    for j in 0..lower.ncols() {
+        for i in 0..lower.nrows() {
+            assert_relative_eq!(lower.coeff(i, j), expected.coeff(i, j), epsilon = 1e-12);
+        }
+    }
+
+    // A different offset or shape is rejected.
+    assert!(!lower.refresh_lower_block_from(&b, 0));
+    let c = chain_spd(5);
+    assert!(!lower.refresh_lower_block_from(&c, 2));
+}

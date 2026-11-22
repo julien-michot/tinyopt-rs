@@ -20,6 +20,11 @@ use crate::sparse::suitesparse::CholmodSolver;
 pub struct SparseLinearSolvers<S> {
     options: LinearSolverOptions,
     ldlt: SimplicialLdl<S>,
+    /// Lower triangle of the eliminated block, reused across iterations.
+    eliminated: SparseMatrix<S>,
+    /// Whether the lower triangle is complete, so values can be refreshed
+    /// without rebuilding the pattern.
+    refresh_ok: bool,
     analyzed: bool,
     computed: bool,
     num_reduced: usize,
@@ -109,6 +114,8 @@ impl<S: Real> SparseLinearSolvers<S> {
         Self {
             options,
             ldlt: SimplicialLdl::new(),
+            eliminated: SparseMatrix::new(0, 0),
+            refresh_ok: false,
             analyzed: false,
             computed: false,
             num_reduced: 0,
@@ -197,10 +204,16 @@ impl<S: Real> SparseLinearSolvers<S> {
             self.computed = false;
             return true;
         }
-        let eliminated = self.eliminated_block(h, num_reduced);
+        self.eliminated = self.eliminated_block(h, num_reduced).to_lower();
+        // A complete lower triangle can be refreshed in place (`compute`).
+        let n = h.nrows();
+        let lower_count: usize = (num_reduced..n)
+            .map(|j| h.column(j).filter(|&(i, _)| i >= j).count())
+            .sum();
+        self.refresh_ok = lower_count == self.eliminated.values().len();
         self.analyzed = self
             .ldlt
-            .analyze_pattern_with(&eliminated.to_lower(), self.options.ordering);
+            .analyze_pattern_with(&self.eliminated, self.options.ordering);
         self.computed = false;
         self.analyzed
     }
@@ -238,8 +251,19 @@ impl<S: Real> SparseLinearSolvers<S> {
             self.computed = true;
             return true;
         }
-        let eliminated = self.eliminated_block(h, self.num_reduced);
-        self.computed = self.ldlt.factorize(&eliminated.to_lower());
+        // Refresh the eliminated block in place; rebuild (and re-analyze) when
+        // the pattern changed.
+        let reused = self.refresh_ok
+            && self
+                .eliminated
+                .refresh_lower_block_from(h, self.num_reduced);
+        if !reused {
+            self.eliminated = self.eliminated_block(h, self.num_reduced).to_lower();
+            self.analyzed = self
+                .ldlt
+                .analyze_pattern_with(&self.eliminated, self.options.ordering);
+        }
+        self.computed = self.analyzed && self.ldlt.factorize(&self.eliminated);
         self.computed
     }
 

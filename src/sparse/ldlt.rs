@@ -34,6 +34,7 @@ pub struct SimplicialLdl<S> {
     li: Vec<usize>,
     lx: Vec<S>,
     d: Vec<S>,
+    perm_values: Vec<S>,
     row_entries: Vec<Vec<(usize, usize)>>,
     analyzed: bool,
     computed: bool,
@@ -61,6 +62,7 @@ impl<S: Real> SimplicialLdl<S> {
             li: Vec::new(),
             lx: Vec::new(),
             d: Vec::new(),
+            perm_values: Vec::new(),
             row_entries: Vec::new(),
             analyzed: false,
             computed: false,
@@ -220,16 +222,16 @@ impl<S: Real> SimplicialLdl<S> {
         let n = self.n;
 
         // Values in elimination order; the pattern is reused from the analysis.
-        let mut perm_values;
         let (ptr, idx, values): (&[usize], &[usize], &[S]) = if self.permuted {
             if lower.non_zeros() != self.dest.len() {
                 return false;
             }
-            perm_values = vec![S::zero(); self.work_idx.len()];
+            self.perm_values.clear();
+            self.perm_values.resize(self.work_idx.len(), S::zero());
             for (p, &q) in self.dest.iter().enumerate() {
-                perm_values[q] = lower.values()[p];
+                self.perm_values[q] = lower.values()[p];
             }
-            (&self.work_ptr, &self.work_idx, &perm_values)
+            (&self.work_ptr, &self.work_idx, &self.perm_values)
         } else {
             (lower.col_ptrs(), lower.row_indices(), lower.values())
         };
