@@ -18,6 +18,13 @@ ninja = "*"
 python = "3.12.*"
 matplotlib = ">=3.8"
 
+[feature.bench.target.linux-64.dependencies]
+c-compiler = "*"
+cxx-compiler = "*"
+
+[feature.bench.activation.env]
+CMAKE_TOOLCHAIN_FILE = "$PIXI_PROJECT_ROOT/benchmarks/compare/cmake/disable-cuda.cmake"
+
 [environments]
 bench = ["bench"]
 suitesparse = ["suitesparse"]

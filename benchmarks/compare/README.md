@@ -67,8 +67,15 @@ and LM on the CPU.
 | Backend | How it runs |
 |---|---|
 | `tinyopt-rs` | In-process optimizer (`nalgebra` backend). |
-| `ceres-rs` | In-process via the [`ceres-solver`](https://crates.io/crates/ceres-solver) crate, built from its vendored Ceres 2.2 + Eigen 3.4 sources (`source` feature). Needs `cmake` and a C++17 compiler; the first build takes a few minutes and is cached. |
+| `ceres-rs` | In-process via the [`ceres-solver`](https://crates.io/crates/ceres-solver) crate, built from its vendored Ceres 2.2 + Eigen 3.4 sources (`source` feature). Needs `cmake` and a C++17 compiler; the Pixi benchmark environment builds the CPU-only Ceres library with a matching C/C++ toolchain. The first build takes a few minutes and is cached. |
 | `cpp-tinyopt` | Runs the C++ `tinyopt_bench_tinyopt` binary and parses its Catch2 XML output. |
+
+If Ceres was previously built with a different compiler setup, clear the old
+benchmark cache once:
+
+```sh
+pixi run -e bench cargo clean --manifest-path benchmarks/compare/Cargo.toml
+```
 
 Build the C++ binary from the C++ checkout:
 

@@ -28,7 +28,8 @@ residual or Jacobian buffers.
 tinyopt = "0.8"
 ```
 
-Default features are `nalgebra` + `autodiff`. Exactly one backend must be enabled.
+The default features are `nalgebra` and `autodiff`. Exactly one backend must be
+enabled; `nalgebra` and `faer` are mutually exclusive.
 
 | Feature | Default | Purpose |
 |---|---|---|
@@ -37,8 +38,12 @@ Default features are `nalgebra` + `autodiff`. Exactly one backend must be enable
 | `autodiff` | yes | forward-mode AD through `num-dual` (requires `nalgebra`) |
 | `numdiff` | no | central finite differences |
 | `rayon` | no | optional Rayon support for parallel accumulation and independent block-Schur work |
-| `solver-llt`, `solver-lu`, `solver-qr`, `solver-svd` | no | extra dense factorization methods |
 | `suitesparse` | no | optional CHOLMOD backend for scalar sparse solves (system SuiteSparse) |
+| `solver-ldlt` | yes (via backend) | symmetric-indefinite LDLT factorization, the default dense solver |
+| `solver-llt` | no | Cholesky LLT factorization |
+| `solver-lu` | no | pivoted LU factorization |
+| `solver-qr` | no | QR factorization |
+| `solver-svd` | no | SVD factorization with pseudo-inverse fallback |
 
 ```toml
 # faer backend without autodiff
