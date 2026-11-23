@@ -21,6 +21,28 @@ residual or Jacobian buffers.
 - Backends: [`nalgebra`](https://crates.io/crates/nalgebra) (static + dynamic) or
   [`faer`](https://crates.io/crates/faer) (dynamic).
 
+## Benchmarks
+
+The quick cross-library benchmark suite compares `tinyopt-rs` (nalgebra) with
+`ceres-rs` on Linux x86_64 (10 samples). In the current run, tinyopt-rs was
+3.2-10.3x faster across the six measured problems:
+
+| Problem | tinyopt-rs | ceres-rs |
+|---|---:|---:|
+| 3D static | 1.42 µs | 14.70 µs |
+| 33D dynamic | 17.59 µs | 63.22 µs |
+| 100D sparse chain | 67.66 µs | 667.57 µs |
+| 32x6 block tridiagonal | 129.30 µs | 471.10 µs |
+| 50-observation Huber pose | 23.92 µs | 145.96 µs |
+| 2-cam / 200-pts BA | 1.24 ms | 4.01 ms |
+| 100-cam / 50k-pts BA, 1 Rayon thread (Schur) | 185.90 ms | — |
+| 100-cam / 50k-pts BA, 8 Rayon threads (Schur) | 135.32 ms | — |
+| 100-cam / 50k-pts BA, WGPU f32 GPU assembly | 11.340 s | — |
+
+Run `pixi run bench-quick` and `pixi run bench-report` to reproduce the suite and
+generate the full report. The C++ benchmark binary was not available in this run.
+Results obtained in Nov. 2026, on my old laptop so may change on your fancy smartwatch (typical usecase for Tinyopt).
+
 ## Installation
 
 ```toml
@@ -48,62 +70,6 @@ enabled; `nalgebra` and `faer` are mutually exclusive.
 ```toml
 # faer backend without autodiff
 tinyopt = { version = "0.8", default-features = false, features = ["faer"] }
-```
-
-### Optional Rayon parallelism
-
-Enable `rayon` to parallelize independent factor accumulation and large
-independent-block Schur computations in the block-sparse solver:
-
-```toml
-tinyopt = { version = "0.8", features = ["rayon"] }
-```
-
-`tinyopt::rayon` re-exports Rayon when the feature is enabled. Run optimization
-inside a configured pool to control the number of threads:
-
-```rust,ignore
-let pool = tinyopt::rayon::ThreadPoolBuilder::new()
-    .num_threads(8)
-    .build()?;
-pool.install(|| {
-    tinyopt::optimize(&mut params, accumulation, &options)
-});
-```
-
-Use `optimize_parallel` when each objective term can be evaluated independently.
-The factor callback receives its index, the parameter slice, and optional
-gradient/Hessian accumulators; add that factor's contribution to any provided
-accumulator and return its cost:
-
-```rust,ignore
-let summary = tinyopt::optimize_parallel(&mut x, factors.len(), factor, &options);
-```
-
-For sparse Hessians, use `optimize_parallel_sparse`; for compile-time
-block-sparse layouts, use `optimize_parallel_block_sparse::<BlockTypes, _, _>`.
-These APIs keep the same factor callback shape while selecting the Hessian
-accumulator type explicitly.
-
-With `rayon`, sets of at least 16 factors use parallel evaluation when the
-active Rayon pool has multiple threads; smaller sets, single-thread pools, and
-builds without the feature use the serial path. Callbacks must be safe to invoke
-concurrently, and floating-point reduction order may differ from serial
-accumulation. Existing single-callback `optimize` calls remain serial.
-The block-sparse solver parallelizes numeric Schur work only when eliminated
-blocks are independent and the problem is large enough; coupled/fallback
-systems keep the serial path. Builds without `rayon` have no Rayon dependency.
-
-### Optional CHOLMOD backend
-
-Enable `suitesparse` to route scalar sparse systems (`LinearSolverMethod::SuiteSparse`)
-through CHOLMOD. The build script locates the headers and library via
-`CHOLMOD_INCLUDE_DIR` / `CHOLMOD_LIB_DIR`, a conda `CONDA_PREFIX`, or the usual
-`/opt/homebrew` and `/usr/local` prefixes. Like the C++ dispatch, CHOLMOD also
-factorizes the eliminated bottom-right block of a Schur partition.
-
-```shell
-cargo test --features suitesparse
 ```
 
 ## Quick start: manual accumulation
@@ -642,6 +608,64 @@ cargo bench --bench sparse
 
 Cross-library benchmarks (tinyopt-rs vs Ceres vs the C++ tinyopt binary) live in
 `benchmarks/compare` and produce an HTML/Markdown report.
+
+## Optional backends
+
+### Optional Rayon parallelism
+
+Enable `rayon` to parallelize independent factor accumulation and large
+independent-block Schur computations in the block-sparse solver:
+
+```toml
+tinyopt = { version = "0.8", features = ["rayon"] }
+```
+
+`tinyopt::rayon` re-exports Rayon when the feature is enabled. Run optimization
+inside a configured pool to control the number of threads:
+
+```rust,ignore
+let pool = tinyopt::rayon::ThreadPoolBuilder::new()
+    .num_threads(8)
+    .build()?;
+pool.install(|| {
+    tinyopt::optimize(&mut params, accumulation, &options)
+});
+```
+
+Use `optimize_parallel` when each objective term can be evaluated independently.
+The factor callback receives its index, the parameter slice, and optional
+gradient/Hessian accumulators; add that factor's contribution to any provided
+accumulator and return its cost:
+
+```rust,ignore
+let summary = tinyopt::optimize_parallel(&mut x, factors.len(), factor, &options);
+```
+
+For sparse Hessians, use `optimize_parallel_sparse`; for compile-time
+block-sparse layouts, use `optimize_parallel_block_sparse::<BlockTypes, _, _>`.
+These APIs keep the same factor callback shape while selecting the Hessian
+accumulator type explicitly.
+
+With `rayon`, sets of at least 16 factors use parallel evaluation when the
+active Rayon pool has multiple threads; smaller sets, single-thread pools, and
+builds without the feature use the serial path. Callbacks must be safe to invoke
+concurrently, and floating-point reduction order may differ from serial
+accumulation. Existing single-callback `optimize` calls remain serial.
+The block-sparse solver parallelizes numeric Schur work only when eliminated
+blocks are independent and the problem is large enough; coupled/fallback
+systems keep the serial path. Builds without `rayon` have no Rayon dependency.
+
+### Optional CHOLMOD backend
+
+Enable `suitesparse` to route scalar sparse systems (`LinearSolverMethod::SuiteSparse`)
+through CHOLMOD. The build script locates the headers and library via
+`CHOLMOD_INCLUDE_DIR` / `CHOLMOD_LIB_DIR`, a conda `CONDA_PREFIX`, or the usual
+`/opt/homebrew` and `/usr/local` prefixes. Like the C++ dispatch, CHOLMOD also
+factorizes the eliminated bottom-right block of a Schur partition.
+
+```shell
+cargo test --features suitesparse
+```
 
 ## License
 
