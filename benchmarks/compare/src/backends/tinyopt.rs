@@ -24,11 +24,16 @@ block_sparse_types!(BaTypes, [6, 3]);
 #[cfg(feature = "rayon")]
 mod parallel_ba;
 #[cfg(feature = "rayon")]
-pub(crate) use parallel_ba::{measure_ba_block_schur, run_ba_block_parallel};
+pub(crate) use parallel_ba::{
+    measure_ba_block_cpu_assembly, measure_ba_block_schur, run_ba_block_parallel,
+};
 #[cfg(feature = "wgpu")]
 mod wgpu_ba;
 #[cfg(feature = "wgpu")]
-pub(crate) use wgpu_ba::{run_ba_block_wgpu, run_ba_block_wgpu_f64, wgpu_f64_supported};
+pub(crate) use wgpu_ba::{
+    measure_ba_block_wgpu, measure_ba_block_wgpu_f64, run_ba_block_wgpu, run_ba_block_wgpu_f64,
+    wgpu_f64_supported,
+};
 
 pub fn run(case: &Case) -> Outcome {
     match case.kind {

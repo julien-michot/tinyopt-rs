@@ -44,6 +44,8 @@ pub struct WgpuBaF32 {
     cross: wgpu::Buffer,
     point_count: u32,
     window: u32,
+    staging: Vec<wgpu::Buffer>,
+    params_values: Vec<f32>,
 }
 
 impl WgpuBaF32 {
@@ -193,6 +195,25 @@ impl WgpuBaF32 {
                 },
             ],
         });
+        let lengths = [
+            points,
+            points * window as usize * 6,
+            points * 3,
+            points * window as usize * 36,
+            points * 9,
+            points * window as usize * 18,
+        ];
+        let staging = lengths
+            .iter()
+            .map(|&length| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("BA persistent staging"),
+                    size: (length.next_multiple_of(4) * 4) as u64,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
         Self {
             device,
             queue,
@@ -207,13 +228,17 @@ impl WgpuBaF32 {
             cross,
             point_count: points as u32,
             window,
+            staging,
+            params_values: Vec::with_capacity(7 * cams + 3 * points),
         }
     }
 
     pub fn accumulate(&mut self, x: &[f64], need_grad_hessian: bool) -> WgpuBaContribution {
-        let params: Vec<f32> = x.iter().map(|&value| value as f32).collect();
+        self.params_values.clear();
+        self.params_values
+            .extend(x.iter().map(|&value| value as f32));
         self.queue
-            .write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
+            .write_buffer(&self.params, 0, bytemuck::cast_slice(&self.params_values));
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -254,28 +279,10 @@ impl WgpuBaF32 {
         } else {
             [self.point_count as usize, 0, 0, 0, 0, 0]
         };
-        let stagers: Vec<_> = if need_grad_hessian {
-            lengths
-                .iter()
-                .map(|&length| {
-                    self.device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("BA staging"),
-                        size: (length.next_multiple_of(4) * 4) as u64,
-                        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    })
-                })
-                .collect()
-        } else {
-            vec![self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("BA cost staging"),
-                size: (lengths[0].next_multiple_of(4) * 4) as u64,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })]
-        };
+        let staging_count = if need_grad_hessian { 6 } else { 1 };
         if need_grad_hessian {
-            for (staging, (&length, output)) in stagers
+            for (staging, (&length, output)) in self
+                .staging
                 .iter()
                 .zip(lengths.iter().zip(output_buffers.iter()))
             {
@@ -291,26 +298,37 @@ impl WgpuBaF32 {
             encoder.copy_buffer_to_buffer(
                 &self.cost,
                 0,
-                &stagers[0],
+                &self.staging[0],
                 0,
                 (lengths[0].next_multiple_of(4) * 4) as u64,
             );
         }
         self.queue.submit([encoder.finish()]);
 
-        let read_f32 = |staging: &wgpu::Buffer, length: usize| -> Vec<f32> {
+        let mut receivers = Vec::with_capacity(staging_count);
+        for staging in self.staging.iter().take(staging_count) {
             let (sender, receiver) = mpsc::channel();
             staging
                 .slice(..)
                 .map_async(wgpu::MapMode::Read, move |result| {
                     let _ = sender.send(result);
                 });
-            self.device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                })
-                .expect("wgpu poll");
+            receivers.push(receiver);
+        }
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("wgpu poll");
+
+        let mut mapped_values = Vec::with_capacity(staging_count);
+        for (index, (receiver, staging)) in receivers
+            .iter()
+            .zip(self.staging.iter().take(staging_count))
+            .enumerate()
+        {
+            let length = lengths[index];
             receiver
                 .recv()
                 .expect("wgpu readback")
@@ -319,20 +337,19 @@ impl WgpuBaF32 {
                 .slice(..)
                 .get_mapped_range()
                 .expect("map buffer view");
-            let values = bytemuck::cast_slice::<u8, f32>(&view[..length * 4]).to_vec();
+            mapped_values.push(bytemuck::cast_slice::<u8, f32>(&view[..length * 4]).to_vec());
             drop(view);
             staging.unmap();
-            values
-        };
-        let cost = read_f32(&stagers[0], lengths[0]);
+        }
+        let cost = mapped_values.remove(0);
         if need_grad_hessian {
             WgpuBaContribution {
                 cost,
-                camera_gradient: read_f32(&stagers[1], lengths[1]),
-                point_gradient: read_f32(&stagers[2], lengths[2]),
-                camera_hessian: read_f32(&stagers[3], lengths[3]),
-                point_hessian: read_f32(&stagers[4], lengths[4]),
-                cross: read_f32(&stagers[5], lengths[5]),
+                camera_gradient: mapped_values.remove(0),
+                point_gradient: mapped_values.remove(0),
+                camera_hessian: mapped_values.remove(0),
+                point_hessian: mapped_values.remove(0),
+                cross: mapped_values.remove(0),
             }
         } else {
             WgpuBaContribution {
@@ -629,6 +646,48 @@ mod tests {
     }
 }
 
+pub(crate) fn measure_ba_block_wgpu(
+    cams: usize,
+    points: usize,
+    warmup: std::time::Duration,
+    samples: usize,
+) -> crate::harness::Stats {
+    let problem = ba::make_problem(cams, points);
+    let params = ba_params(&problem);
+    let mut gpu = WgpuBaF32::new(cams, points);
+    crate::harness::measure(warmup, samples, || {
+        let contribution = gpu.accumulate(&params.values, true);
+        assert!(!contribution.cost.is_empty());
+        Outcome {
+            converged: true,
+            iterations: 1,
+            final_cost: 0.0,
+        }
+    })
+    .0
+}
+
+pub(crate) fn measure_ba_block_wgpu_f64(
+    cams: usize,
+    points: usize,
+    warmup: std::time::Duration,
+    samples: usize,
+) -> crate::harness::Stats {
+    let problem = ba::make_problem(cams, points);
+    let params = ba_params(&problem);
+    let mut gpu = WgpuBaF64::new(cams, points).expect("create f64 WGPU BA pipeline");
+    crate::harness::measure(warmup, samples, || {
+        let contribution = gpu.accumulate(&params.values, true);
+        assert!(!contribution.cost.is_empty());
+        Outcome {
+            converged: true,
+            iterations: 1,
+            final_cost: 0.0,
+        }
+    })
+    .0
+}
+
 pub(crate) fn run_ba_block_wgpu(case: &Case, cams: usize, points: usize) -> Outcome {
     type V = Vector<f64, Dynamic>;
     let problem = ba::make_problem(cams, points);
@@ -764,6 +823,7 @@ pub struct WgpuBaF64 {
     cross: wgpu::Buffer,
     point_count: u32,
     window: u32,
+    staging: Vec<wgpu::Buffer>,
 }
 
 impl WgpuBaF64 {
@@ -913,6 +973,25 @@ impl WgpuBaF64 {
                 },
             ],
         });
+        let lengths = [
+            points,
+            points * window as usize * 6,
+            points * 3,
+            points * window as usize * 36,
+            points * 9,
+            points * window as usize * 18,
+        ];
+        let staging = lengths
+            .iter()
+            .map(|&length| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("BA f64 persistent staging"),
+                    size: (length * 8) as u64,
+                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })
+            .collect();
         Ok(Self {
             device,
             queue,
@@ -927,6 +1006,7 @@ impl WgpuBaF64 {
             cross,
             point_count: points as u32,
             window,
+            staging,
         })
     }
 
@@ -967,62 +1047,57 @@ impl WgpuBaF64 {
             &self.point_hessian,
             &self.cross,
         ];
-        let stagers: Vec<_> = lengths
+        let staging_count = if need_grad_hessian { 6 } else { 1 };
+        for (index, (&length, staging)) in lengths
             .iter()
-            .take(if need_grad_hessian { 6 } else { 1 })
+            .take(staging_count)
+            .zip(self.staging.iter().take(staging_count))
             .enumerate()
-            .map(|(index, &length)| {
-                let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("BA f64 staging"),
-                    size: (length * 8) as u64,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                if index == 0 || need_grad_hessian {
-                    encoder.copy_buffer_to_buffer(
-                        outputs[index],
-                        0,
-                        &staging,
-                        0,
-                        (length * 8) as u64,
-                    );
-                }
-                staging
-            })
-            .collect();
+        {
+            encoder.copy_buffer_to_buffer(outputs[index], 0, staging, 0, (length * 8) as u64);
+        }
         self.queue.submit([encoder.finish()]);
-        let read_f64 = |staging: &wgpu::Buffer, length: usize| -> Vec<f64> {
+        let mut receivers = Vec::with_capacity(staging_count);
+        for staging in self.staging.iter().take(staging_count) {
             let (sender, receiver) = mpsc::channel();
             staging
                 .slice(..)
                 .map_async(wgpu::MapMode::Read, move |result| {
                     let _ = sender.send(result);
                 });
-            self.device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: None,
-                })
-                .expect("wgpu f64 poll");
+            receivers.push(receiver);
+        }
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .expect("wgpu f64 poll");
+        let mut mapped_values = Vec::with_capacity(staging_count);
+        for (index, (receiver, staging)) in receivers
+            .iter()
+            .zip(self.staging.iter().take(staging_count))
+            .enumerate()
+        {
             receiver
                 .recv()
                 .expect("wgpu f64 readback")
                 .expect("map f64 staging");
             let view = staging.slice(..).get_mapped_range().expect("map f64 view");
-            let values = bytemuck::cast_slice::<u8, f64>(&view[..length * 8]).to_vec();
+            let length = lengths[index];
+            mapped_values.push(bytemuck::cast_slice::<u8, f64>(&view[..length * 8]).to_vec());
             drop(view);
             staging.unmap();
-            values
-        };
-        let cost = read_f64(&stagers[0], lengths[0]);
+        }
+        let cost = mapped_values.remove(0);
         if need_grad_hessian {
             WgpuBaContributionF64 {
                 cost,
-                camera_gradient: read_f64(&stagers[1], lengths[1]),
-                point_gradient: read_f64(&stagers[2], lengths[2]),
-                camera_hessian: read_f64(&stagers[3], lengths[3]),
-                point_hessian: read_f64(&stagers[4], lengths[4]),
-                cross: read_f64(&stagers[5], lengths[5]),
+                camera_gradient: mapped_values.remove(0),
+                point_gradient: mapped_values.remove(0),
+                camera_hessian: mapped_values.remove(0),
+                point_hessian: mapped_values.remove(0),
+                cross: mapped_values.remove(0),
             }
         } else {
             WgpuBaContributionF64 {

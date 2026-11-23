@@ -35,9 +35,14 @@ The quick cross-library benchmark suite compares `tinyopt-rs` (nalgebra) with
 | 32x6 block tridiagonal | 129.30 µs | 471.10 µs |
 | 50-observation Huber pose | 23.92 µs | 145.96 µs |
 | 2-cam / 200-pts BA | 1.24 ms | 4.01 ms |
-| 100-cam / 50k-pts BA, 1 Rayon thread (Schur) | 185.90 ms | — |
-| 100-cam / 50k-pts BA, 8 Rayon threads (Schur) | 135.32 ms | — |
-| 100-cam / 50k-pts BA, WGPU f32 GPU assembly | 11.340 s | — |
+| 100-cam / 50k-pts BA, 1 Rayon thread | 77.199 s | — |
+| 100-cam / 50k-pts BA, 8 Rayon threads | 74.857 s | — |
+| 100-cam / 50k-pts BA, WGPU f32 | 8.973 s | — |
+| 100-cam / 50k-pts BA, WGPU f64 | 10.446 s | — |
+
+All runs converged. Iterations: 2-camera/200-point BA converged in 4 iterations;
+the 100-camera/50k-point 1-thread and 8-thread Rayon runs converged in 38
+iterations; WGPU f32 converged in 34 iterations and WGPU f64 in 38 iterations.
 
 Run `pixi run bench-quick` and `pixi run bench-report` to reproduce the suite and
 generate the full report. The C++ benchmark binary was not available in this run.

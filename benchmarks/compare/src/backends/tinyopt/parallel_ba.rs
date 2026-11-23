@@ -158,6 +158,66 @@ pub(crate) fn measure_ba_block_schur(
     .0
 }
 
+pub(crate) fn measure_ba_block_cpu_assembly(
+    cams: usize,
+    points: usize,
+    threads: usize,
+    warmup: std::time::Duration,
+    samples: usize,
+) -> harness::Stats {
+    let problem = ba::make_problem(cams, points);
+    let window = cams.min(ba::POINT_CAMERA_WINDOW);
+    let pool = tinyopt::rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .expect("build Rayon pool");
+    harness::measure(warmup, samples, || {
+        let final_cost = pool.install(|| {
+            use tinyopt::rayon::prelude::*;
+            (0..points)
+                .into_par_iter()
+                .map(|point_index| {
+                    let mut cost = 0.0;
+                    let start_count = cams - window + 1;
+                    let first_camera = point_index % start_count;
+                    for slot in 0..window {
+                        let camera_index = first_camera + slot;
+                        let camera = problem.initial_cameras[camera_index];
+                        let point = problem.initial_points[point_index];
+                        let projected = ba::project(&camera, &point);
+                        let start = point_index * window;
+                        let observation = &problem.observations[start + slot];
+                        let residual = [
+                            projected[0] - observation.measurement[0],
+                            projected[1] - observation.measurement[1],
+                        ];
+                        cost += 0.5 * (residual[0] * residual[0] + residual[1] * residual[1]);
+                        let (camera_jacobian, point_jacobian) =
+                            ba::projection_jacobians(&camera, &point);
+                        let mut checksum = 0.0;
+                        for k in 0..2 {
+                            for i in 0..6 {
+                                checksum += camera_jacobian[k * 6 + i].abs();
+                            }
+                            for i in 0..3 {
+                                checksum += point_jacobian[k * 3 + i].abs();
+                            }
+                        }
+                        cost += checksum * 0.0;
+                    }
+                    cost
+                })
+                .sum::<f64>()
+        });
+        Outcome {
+            converged: true,
+            iterations: 1,
+            final_cost,
+        }
+    })
+    .0
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::run_ba_block;
@@ -165,8 +225,8 @@ mod tests {
 
     #[test]
     fn parallel_ba_matches_serial_accumulation() {
-        let cams = 4;
-        let points = 600;
+        let cams = 10;
+        let points = 3000;
         let case = Case {
             kind: Kind::BundleAdjustmentBlock { cams, points },
             name: format!("{cams}c {points}p"),

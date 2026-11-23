@@ -29,6 +29,10 @@ pub type DynHessian = Matrix<f64, Dynamic>;
 
 #[cfg(feature = "rayon")]
 const MIN_PARALLEL_FACTORS: usize = 16;
+#[cfg(feature = "rayon")]
+const MAX_PARALLEL_PARTIALS: usize = 4;
+#[cfg(feature = "rayon")]
+const MAX_PARALLEL_FACTORS: usize = 10_000;
 
 #[cfg(feature = "rayon")]
 struct FactorPartial<S: Real, D: Dim, H> {
@@ -122,7 +126,9 @@ where
     ) -> Cost {
         let needs_gradient = gradient.is_some();
         let needs_hessian = hessian.is_some();
-        let worker_count = rayon::current_num_threads().min(self.num_factors);
+        let worker_count = rayon::current_num_threads()
+            .min(MAX_PARALLEL_PARTIALS)
+            .min(self.num_factors);
         let chunk_size = self.num_factors.div_ceil(worker_count);
         let partial = (0..worker_count)
             .into_par_iter()
@@ -183,7 +189,10 @@ where
         hessian: Option<&mut H>,
     ) -> Cost {
         #[cfg(feature = "rayon")]
-        if self.num_factors >= MIN_PARALLEL_FACTORS && rayon::current_num_threads() > 1 {
+        if self.num_factors >= MIN_PARALLEL_FACTORS
+            && self.num_factors <= MAX_PARALLEL_FACTORS
+            && rayon::current_num_threads() > 1
+        {
             return self.eval_parallel(values, gradient, hessian);
         }
         self.eval_serial(values, gradient, hessian)
