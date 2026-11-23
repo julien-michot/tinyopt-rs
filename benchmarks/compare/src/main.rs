@@ -33,6 +33,7 @@ struct Args {
     cpp_bench: PathBuf,
     filter: Option<String>,
     exclude: Option<String>,
+    wgpu_precision: String,
 }
 
 impl Default for Args {
@@ -49,6 +50,7 @@ impl Default for Args {
                 .join("../../../exp-mop/build-bench/benchmarks/tinyopt/tinyopt_bench_tinyopt"),
             filter: None,
             exclude: None,
+            wgpu_precision: "f32".into(),
         }
     }
 }
@@ -78,7 +80,7 @@ fn main() {
     }
 }
 
-#[cfg(feature = "rayon")]
+#[cfg(any(feature = "rayon", feature = "wgpu"))]
 fn parallel_ba(args: Args) {
     let cams = 100;
     let points = 50_000;
@@ -90,71 +92,125 @@ fn parallel_ba(args: Args) {
     let initial_cost = problems::bundle_adjustment::initial_cost(
         &problems::bundle_adjustment::make_problem(cams, points),
     );
-    let mut outcomes = Vec::new();
+    #[cfg(feature = "rayon")]
+    let mut outcomes = Vec::<crate::harness::Outcome>::new();
 
     println!(
         "Bundle adjustment: {cams} cameras, {points} points; {} samples, {} ms warmup",
         args.samples, args.warmup_ms
     );
     println!("Block-sparse Schur compute + solve (BA-shaped Hessian):");
-    println!(
-        "{:<18} {:>12} {:>12} {:>12}",
-        "THREADS", "MEAN (ms)", "MEDIAN (ms)", "MIN (ms)"
-    );
-    for threads in [1, 8] {
-        let stats = backends::tinyopt::measure_ba_block_schur(
-            cams,
-            points,
-            threads,
-            Duration::from_millis(args.warmup_ms),
-            args.samples,
-        );
+    #[cfg(feature = "rayon")]
+    {
         println!(
-            "{threads:<18} {:>12.2} {:>12.2} {:>12.2}",
-            stats.mean_ns / 1e6,
-            stats.median_ns / 1e6,
-            stats.min_ns / 1e6,
+            "{:<18} {:>12} {:>12} {:>12}",
+            "THREADS", "MEAN (ms)", "MEDIAN (ms)", "MIN (ms)"
+        );
+        for threads in [1, 8] {
+            let stats = backends::tinyopt::measure_ba_block_schur(
+                cams,
+                points,
+                threads,
+                Duration::from_millis(args.warmup_ms),
+                args.samples,
+            );
+            println!(
+                "{threads:<18} {:>12.2} {:>12.2} {:>12.2}",
+                stats.mean_ns / 1e6,
+                stats.median_ns / 1e6,
+                stats.min_ns / 1e6,
+            );
+        }
+    }
+
+    #[cfg(feature = "rayon")]
+    {
+        println!("End-to-end tinyopt-rs optimization:");
+        println!(
+            "{:<18} {:>12} {:>12} {:>12} {:>8} {:>12}",
+            "THREADS", "MEAN (ms)", "MEDIAN (ms)", "MIN (ms)", "ITERS", "FINAL COST"
+        );
+        for threads in [1, 8] {
+            let pool = tinyopt::rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .expect("build Rayon thread pool");
+            let (stats, outcome) =
+                harness::measure(Duration::from_millis(args.warmup_ms), args.samples, || {
+                    backends::tinyopt::run_ba_block_parallel(&case, cams, points, &pool)
+                });
+            assert!(
+                outcome.converged && outcome.final_cost < initial_cost * 0.1,
+                "{threads}-thread BA did not converge: {outcome:?}"
+            );
+            println!(
+                "{threads:<18} {:>12.2} {:>12.2} {:>12.2} {:>8} {:>12.4e}",
+                stats.mean_ns / 1e6,
+                stats.median_ns / 1e6,
+                stats.min_ns / 1e6,
+                outcome.iterations,
+                outcome.final_cost
+            );
+            outcomes.push(outcome);
+        }
+        let cost_tolerance = 1e-6 * outcomes[0].final_cost.abs().max(1.0);
+        assert!(
+            (outcomes[0].final_cost - outcomes[1].final_cost).abs() < cost_tolerance,
+            "1-thread and 8-thread final costs diverged: {outcomes:?}"
         );
     }
 
-    println!("End-to-end tinyopt-rs optimization:");
-    println!(
-        "{:<18} {:>12} {:>12} {:>12} {:>8} {:>12}",
-        "THREADS", "MEAN (ms)", "MEDIAN (ms)", "MIN (ms)", "ITERS", "FINAL COST"
-    );
-    for threads in [1, 8] {
-        let pool = tinyopt::rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .expect("build Rayon thread pool");
-        let (stats, outcome) =
-            harness::measure(Duration::from_millis(args.warmup_ms), args.samples, || {
-                backends::tinyopt::run_ba_block_parallel(&case, cams, points, &pool)
-            });
+    #[cfg(feature = "wgpu")]
+    {
+        let precision = args.wgpu_precision.as_str();
+        assert!(
+            matches!(precision, "f32" | "f64"),
+            "--wgpu-precision must be f32 or f64"
+        );
+        if precision == "f64" {
+            assert!(
+                backends::tinyopt::wgpu_f64_supported(),
+                "wgpu f64 BA assembly requires an adapter exposing wgpu::Features::SHADER_F64"
+            );
+        }
+        println!("End-to-end wgpu {precision} assembly + CPU Schur/LM:");
+        let (stats, outcome) = harness::measure(
+            Duration::from_millis(args.warmup_ms),
+            args.samples,
+            || match precision {
+                "f64" => backends::tinyopt::run_ba_block_wgpu_f64(&case, cams, points),
+                _ => backends::tinyopt::run_ba_block_wgpu(&case, cams, points),
+            },
+        );
         assert!(
             outcome.converged && outcome.final_cost < initial_cost * 0.1,
-            "{threads}-thread BA did not converge: {outcome:?}"
+            "wgpu f32 BA did not converge: {outcome:?}"
         );
         println!(
-            "{threads:<18} {:>12.2} {:>12.2} {:>12.2} {:>8} {:>12.4e}",
+            "{:<18} {:>12.2} {:>12.2} {:>12.2} {:>8} {:>12.4e}",
+            format!("wgpu-{precision}"),
             stats.mean_ns / 1e6,
             stats.median_ns / 1e6,
             stats.min_ns / 1e6,
             outcome.iterations,
             outcome.final_cost
         );
-        outcomes.push(outcome);
+        #[cfg(feature = "rayon")]
+        {
+            let rayon = outcomes[0];
+            println!(
+                "Rayon/WGPU final-cost difference: {:.4e}; iterations: {} / {}",
+                (rayon.final_cost - outcome.final_cost).abs(),
+                rayon.iterations,
+                outcome.iterations
+            );
+        }
     }
-    let cost_tolerance = 1e-8 * outcomes[0].final_cost.abs().max(1.0);
-    assert!(
-        (outcomes[0].final_cost - outcomes[1].final_cost).abs() < cost_tolerance,
-        "1-thread and 8-thread final costs diverged: {outcomes:?}"
-    );
 }
 
-#[cfg(not(feature = "rayon"))]
+#[cfg(not(any(feature = "rayon", feature = "wgpu")))]
 fn parallel_ba(_args: Args) {
-    eprintln!("the parallel-ba benchmark requires --features rayon");
+    eprintln!("the parallel-ba benchmark requires --features rayon or --features wgpu");
     std::process::exit(2);
 }
 
@@ -201,6 +257,10 @@ fn parse_args(argv: Vec<String>) -> Args {
             "--exclude" => {
                 i += 1;
                 args.exclude = Some(argv.get(i).expect("--exclude needs a value").clone());
+            }
+            "--wgpu-precision" => {
+                i += 1;
+                args.wgpu_precision = argv.get(i).expect("--wgpu-precision needs a value").clone();
             }
             other => {
                 eprintln!("unknown option: {other}");

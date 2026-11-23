@@ -1,86 +1,13 @@
 use tinyopt::backend::{DenseVector, Vector};
 use tinyopt::block_sparse::{BlockSparseLdlt, BlockSparseMat};
-use tinyopt::optimizers::lm;
-use tinyopt::{Cost, Dynamic};
+use tinyopt::{Cost, Dynamic, optimize_parallel_block_sparse};
 
-#[cfg(test)]
-use super::run_ba_block;
-use super::{BaParams, BaTypes, ba_params, outcome};
-
+use super::{BaTypes, ba_params, outcome};
 use crate::harness::{self, Outcome};
 use crate::options::tinyopt_options;
 #[cfg(test)]
 use crate::problems::Kind;
 use crate::problems::{Case, bundle_adjustment as ba};
-
-use tinyopt::rayon::prelude::*;
-
-#[derive(Clone, Copy)]
-struct CameraContribution {
-    camera: usize,
-    gradient: [f64; 6],
-    hessian: [f64; 36],
-    cross: [f64; 18],
-}
-
-impl Default for CameraContribution {
-    fn default() -> Self {
-        Self {
-            camera: 0,
-            gradient: [0.0; 6],
-            hessian: [0.0; 36],
-            cross: [0.0; 18],
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct PointContribution {
-    point: usize,
-    cost: f64,
-    gradient: [f64; 3],
-    hessian: [f64; 9],
-    cameras: [CameraContribution; 5],
-    camera_count: usize,
-}
-
-impl Default for PointContribution {
-    fn default() -> Self {
-        Self {
-            point: 0,
-            cost: 0.0,
-            gradient: [0.0; 3],
-            hessian: [0.0; 9],
-            cameras: [CameraContribution::default(); 5],
-            camera_count: 0,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parallel_ba_matches_serial_accumulation() {
-        let cams = 4;
-        let points = 600;
-        let case = Case {
-            kind: Kind::BundleAdjustmentBlock { cams, points },
-            name: format!("{cams}c {points}p"),
-            short: format!("{cams}c {points}p"),
-        };
-        let serial = run_ba_block(&case, cams, points);
-        let pool = tinyopt::rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .expect("Rayon pool");
-        let parallel = run_ba_block_parallel(&case, cams, points, &pool);
-
-        assert!(serial.converged && parallel.converged);
-        assert!((serial.final_cost - parallel.final_cost).abs() < 1e-8);
-    }
-}
 
 pub(crate) fn run_ba_block_parallel(
     case: &Case,
@@ -90,160 +17,96 @@ pub(crate) fn run_ba_block_parallel(
 ) -> Outcome {
     type V = Vector<f64, Dynamic>;
     let problem = ba::make_problem(cams, points);
-    let camera_offset = 6 * problem.camera_count();
+    let ambient_camera_offset = 7 * problem.camera_count();
+    let tangent_camera_offset = 6 * problem.camera_count();
     let window = cams.min(ba::POINT_CAMERA_WINDOW);
-
-    let mut opt =
-        lm::Optimizer::<BaParams, BlockSparseMat<BaTypes, f64>>::new(tinyopt_options(&case.kind));
-    opt.init_with(BlockSparseMat::with_counts(&[
-        problem.camera_count(),
-        problem.point_count(),
-    ]));
     let mut x = ba_params(&problem);
 
-    let acc = |xv: &[f64], grad: Option<&mut V>, h: Option<&mut BlockSparseMat<BaTypes, f64>>| {
-        if grad.is_none() && h.is_none() {
-            let squared_error = problem
-                .observations
-                .par_chunks(window)
-                .map(|observations| {
-                    observations
-                        .iter()
-                        .map(|observation| {
-                            let camera = [
-                                xv[observation.camera * 6],
-                                xv[observation.camera * 6 + 1],
-                                xv[observation.camera * 6 + 2],
-                                xv[observation.camera * 6 + 3],
-                                xv[observation.camera * 6 + 4],
-                                xv[observation.camera * 6 + 5],
-                            ];
-                            let point_start = camera_offset + observation.point * 3;
-                            let point = [xv[point_start], xv[point_start + 1], xv[point_start + 2]];
-                            let projected = ba::project(&camera, &point);
-                            let dx = projected[0] - observation.measurement[0];
-                            let dy = projected[1] - observation.measurement[1];
-                            dx * dx + dy * dy
-                        })
-                        .sum::<f64>()
-                })
-                .sum::<f64>();
-            return Cost::with_num_residuals(
-                0.5 * squared_error,
-                (2 * problem.observations.len()) as i32,
-            );
-        }
+    let factor = |point_index: usize,
+                  values: &[f64],
+                  gradient: Option<&mut V>,
+                  hessian: Option<&mut BlockSparseMat<BaTypes, f64>>| {
+        let start = point_index * window;
+        let end = (start + window).min(problem.observations.len());
+        let observations = &problem.observations[start..end];
+        let mut cost = 0.0;
+        let mut gradient = gradient;
+        let mut hessian = hessian;
 
-        let points: Vec<_> = problem
-            .observations
-            .par_chunks(window)
-            .map(|observations| {
-                let mut contribution = PointContribution {
-                    point: observations[0].point,
-                    camera_count: observations.len(),
-                    ..PointContribution::default()
-                };
-                for (index, observation) in observations.iter().enumerate() {
-                    let camera = [
-                        xv[observation.camera * 6],
-                        xv[observation.camera * 6 + 1],
-                        xv[observation.camera * 6 + 2],
-                        xv[observation.camera * 6 + 3],
-                        xv[observation.camera * 6 + 4],
-                        xv[observation.camera * 6 + 5],
-                    ];
-                    let point_start = camera_offset + observation.point * 3;
-                    let point = [xv[point_start], xv[point_start + 1], xv[point_start + 2]];
-                    let (jc, jp) = ba::projection_jacobians(&camera, &point);
-                    let projected = ba::project(&camera, &point);
-                    let residual = [
-                        projected[0] - observation.measurement[0],
-                        projected[1] - observation.measurement[1],
-                    ];
-                    contribution.cost += residual[0] * residual[0] + residual[1] * residual[1];
+        for observation in observations {
+            let camera_start = observation.camera * 7;
+            let camera = [
+                values[camera_start],
+                values[camera_start + 1],
+                values[camera_start + 2],
+                values[camera_start + 3],
+                values[camera_start + 4],
+                values[camera_start + 5],
+                values[camera_start + 6],
+            ];
+            let point_start = ambient_camera_offset + observation.point * 3;
+            let point = [
+                values[point_start],
+                values[point_start + 1],
+                values[point_start + 2],
+            ];
+            let projected = ba::project(&camera, &point);
+            let residual = [
+                projected[0] - observation.measurement[0],
+                projected[1] - observation.measurement[1],
+            ];
+            cost += 0.5 * (residual[0] * residual[0] + residual[1] * residual[1]);
 
-                    let camera_contribution = &mut contribution.cameras[index];
-                    camera_contribution.camera = observation.camera;
+            if gradient.is_some() || hessian.is_some() {
+                let (camera_jacobian, point_jacobian) = ba::projection_jacobians(&camera, &point);
+                if let Some(gradient) = gradient.as_deref_mut() {
                     for i in 0..6 {
-                        for k in 0..2 {
-                            camera_contribution.gradient[i] += jc[k * 6 + i] * residual[k];
-                        }
-                        for j in 0..6 {
-                            for k in 0..2 {
-                                camera_contribution.hessian[i * 6 + j] +=
-                                    jc[k * 6 + i] * jc[k * 6 + j];
-                            }
-                        }
-                        for j in 0..3 {
-                            for k in 0..2 {
-                                camera_contribution.cross[i * 3 + j] +=
-                                    jc[k * 6 + i] * jp[k * 3 + j];
-                            }
-                        }
+                        let contribution: f64 = (0..2)
+                            .map(|k| camera_jacobian[k * 6 + i] * residual[k])
+                            .sum();
+                        let index = observation.camera * 6 + i;
+                        gradient.set_at(index, gradient.at(index) + contribution);
                     }
                     for i in 0..3 {
-                        for k in 0..2 {
-                            contribution.gradient[i] += jp[k * 3 + i] * residual[k];
-                        }
-                        for j in 0..3 {
-                            for k in 0..2 {
-                                contribution.hessian[i * 3 + j] += jp[k * 3 + i] * jp[k * 3 + j];
-                            }
-                        }
+                        let contribution: f64 = (0..2)
+                            .map(|k| point_jacobian[k * 3 + i] * residual[k])
+                            .sum();
+                        let index = tangent_camera_offset + observation.point * 3 + i;
+                        gradient.set_at(index, gradient.at(index) + contribution);
                     }
                 }
-                contribution
-            })
-            .collect();
-
-        let mut cost = 0.0;
-        let mut g = grad;
-        let mut h = h;
-        for point in points {
-            cost += point.cost;
-            if let Some(g) = g.as_mut() {
-                let point_start = camera_offset + point.point * 3;
-                for i in 0..3 {
-                    g.set_at(point_start + i, g.at(point_start + i) + point.gradient[i]);
-                }
-                for camera in &point.cameras[..point.camera_count] {
-                    for i in 0..6 {
-                        let index = camera.camera * 6 + i;
-                        g.set_at(index, g.at(index) + camera.gradient[i]);
-                    }
-                }
-            }
-            if let Some(h) = h.as_mut() {
-                let mut point_block = h.block_mut::<3, 3>(point.point, point.point);
-                for i in 0..3 {
-                    for j in 0..3 {
-                        point_block.set_at(i, j, point_block.at(i, j) + point.hessian[i * 3 + j]);
-                    }
-                }
-                for camera in &point.cameras[..point.camera_count] {
-                    let mut camera_block = h.block_mut::<6, 6>(camera.camera, camera.camera);
-                    for i in 0..6 {
-                        for j in 0..6 {
-                            camera_block.set_at(
-                                i,
-                                j,
-                                camera_block.at(i, j) + camera.hessian[i * 6 + j],
-                            );
-                        }
-                    }
-                    let mut cross_block = h.block_mut::<6, 3>(camera.camera, point.point);
-                    for i in 0..6 {
-                        for j in 0..3 {
-                            cross_block.set_at(i, j, camera.cross[i * 3 + j]);
-                        }
+                if let Some(hessian) = hessian.as_deref_mut() {
+                    hessian
+                        .block_mut::<6, 6>(observation.camera, observation.camera)
+                        .add_jtj(1.0, &camera_jacobian, 2);
+                    hessian
+                        .block_mut::<3, 3>(observation.point, observation.point)
+                        .add_jtj(1.0, &point_jacobian, 2);
+                    let mut cross =
+                        hessian.block_mut::<6, 3>(observation.camera, observation.point);
+                    for k in 0..2 {
+                        cross.add_outer_product(
+                            1.0,
+                            &camera_jacobian[k * 6..k * 6 + 6],
+                            &point_jacobian[k * 3..k * 3 + 3],
+                        );
                     }
                 }
             }
         }
-        Cost::with_num_residuals(cost * 0.5, (2 * problem.observations.len()) as i32)
+
+        Cost::with_num_residuals(cost, (2 * observations.len()) as i32)
     };
 
-    let summary = pool.install(|| opt.optimize(&mut x, acc));
+    let options = tinyopt_options(&case.kind);
+    let summary = pool.install(|| {
+        optimize_parallel_block_sparse::<BaTypes, _, _>(
+            &mut x,
+            problem.point_count(),
+            factor,
+            &options,
+        )
+    });
     outcome(&summary)
 }
 
@@ -293,4 +156,30 @@ pub(crate) fn measure_ba_block_schur(
         }
     })
     .0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::run_ba_block;
+    use super::*;
+
+    #[test]
+    fn parallel_ba_matches_serial_accumulation() {
+        let cams = 4;
+        let points = 600;
+        let case = Case {
+            kind: Kind::BundleAdjustmentBlock { cams, points },
+            name: format!("{cams}c {points}p"),
+            short: format!("{cams}c {points}p"),
+        };
+        let serial = run_ba_block(&case, cams, points);
+        let pool = tinyopt::rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("Rayon pool");
+        let parallel = run_ba_block_parallel(&case, cams, points, &pool);
+
+        assert!(serial.converged && parallel.converged);
+        assert!((serial.final_cost - parallel.final_cost).abs() < 1e-8);
+    }
 }

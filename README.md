@@ -47,8 +47,8 @@ tinyopt = { version = "0.8", default-features = false, features = ["faer"] }
 
 ### Optional Rayon parallelism
 
-Enable `rayon` to use Rayon in a custom accumulation callback and to parallelize
-large independent-block Schur computations in the block-sparse solver:
+Enable `rayon` to parallelize independent factor accumulation and large
+independent-block Schur computations in the block-sparse solver:
 
 ```toml
 tinyopt = { version = "0.8", features = ["rayon"] }
@@ -66,11 +66,28 @@ pool.install(|| {
 });
 ```
 
-Existing accumulation callbacks stay serial unless they explicitly use Rayon
-parallel iterators with thread-local partials and a reduction. The block-sparse
-solver parallelizes the numeric Schur work only when eliminated blocks are
-independent and the problem is large enough; coupled/fallback systems keep the
-serial path. Builds without `rayon` have no Rayon dependency.
+Use `optimize_parallel` when each objective term can be evaluated independently.
+The factor callback receives its index, the parameter slice, and optional
+gradient/Hessian accumulators; add that factor's contribution to any provided
+accumulator and return its cost:
+
+```rust,ignore
+let summary = tinyopt::optimize_parallel(&mut x, factors.len(), factor, &options);
+```
+
+For sparse Hessians, use `optimize_parallel_sparse`; for compile-time
+block-sparse layouts, use `optimize_parallel_block_sparse::<BlockTypes, _, _>`.
+These APIs keep the same factor callback shape while selecting the Hessian
+accumulator type explicitly.
+
+With `rayon`, sets of at least 16 factors use parallel evaluation when the
+active Rayon pool has multiple threads; smaller sets, single-thread pools, and
+builds without the feature use the serial path. Callbacks must be safe to invoke
+concurrently, and floating-point reduction order may differ from serial
+accumulation. Existing single-callback `optimize` calls remain serial.
+The block-sparse solver parallelizes numeric Schur work only when eliminated
+blocks are independent and the problem is large enough; coupled/fallback
+systems keep the serial path. Builds without `rayon` have no Rayon dependency.
 
 ### Optional CHOLMOD backend
 

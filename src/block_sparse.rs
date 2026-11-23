@@ -411,6 +411,25 @@ impl<T: BlockTypes, S: Real> BlockSparseMat<T, S> {
         }
     }
 
+    /// Add another block-sparse matrix, growing this matrix's block counts and
+    /// sparsity pattern as needed.
+    pub fn add_assign(&mut self, other: &Self) {
+        assert_eq!(self.sizes, other.sizes, "block sizes must match");
+        for (target_count, source_count) in self.counts.iter_mut().zip(&other.counts) {
+            *target_count = (*target_count).max(*source_count);
+        }
+        for pair in 0..self.blocks.len() {
+            let (row_type, col_type) = Self::pair_types(pair);
+            self.blocks[pair].resize(self.counts[row_type], self.counts[col_type]);
+            for ((row, col), source) in other.blocks[pair].iter() {
+                let target = self.blocks[pair].get_or_insert(row, col);
+                for (target, source) in target.iter_mut().zip(source) {
+                    *target += *source;
+                }
+            }
+        }
+    }
+
     /// Set the diagonal blocks of every type to identity.
     pub fn set_identity(&mut self) {
         self.set_zero();

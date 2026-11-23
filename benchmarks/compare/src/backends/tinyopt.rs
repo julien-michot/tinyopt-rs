@@ -25,6 +25,10 @@ block_sparse_types!(BaTypes, [6, 3]);
 mod parallel_ba;
 #[cfg(feature = "rayon")]
 pub(crate) use parallel_ba::{measure_ba_block_schur, run_ba_block_parallel};
+#[cfg(feature = "wgpu")]
+mod wgpu_ba;
+#[cfg(feature = "wgpu")]
+pub(crate) use wgpu_ba::{run_ba_block_wgpu, run_ba_block_wgpu_f64, wgpu_f64_supported};
 
 pub fn run(case: &Case) -> Outcome {
     match case.kind {
@@ -194,6 +198,7 @@ fn run_sparse_chain(case: &Case, dims: usize) -> Outcome {
 
 #[derive(Clone, Debug)]
 struct BaParams {
+    /// Ambient SE(3) camera state (7 doubles each), followed by Euclidean points.
     values: Vec<f64>,
     camera_count: usize,
 }
@@ -203,7 +208,7 @@ impl Params for BaParams {
     type Dim = Dynamic;
 
     fn dims(&self) -> usize {
-        self.values.len()
+        6 * self.camera_count + (self.values.len() - 7 * self.camera_count)
     }
 
     fn as_slice(&self) -> &[f64] {
@@ -211,8 +216,31 @@ impl Params for BaParams {
     }
 
     fn plus_eq(&mut self, delta: &[f64]) {
-        for (value, d) in self.values.iter_mut().zip(delta) {
-            *value += d;
+        for camera in 0..self.camera_count {
+            let mut xi = [0.0; 6];
+            xi.copy_from_slice(&delta[camera * 6..camera * 6 + 6]);
+            let start = camera * 7;
+            let camera_value = [
+                self.values[start],
+                self.values[start + 1],
+                self.values[start + 2],
+                self.values[start + 3],
+                self.values[start + 4],
+                self.values[start + 5],
+                self.values[start + 6],
+            ];
+            let updated = ba::se3_plus(&camera_value, &xi);
+            self.values[start..start + 7].copy_from_slice(&updated);
+        }
+        let camera_offset = 7 * self.camera_count;
+        let point_offset = 6 * self.camera_count;
+        let point_count = (self.values.len() - camera_offset) / 3;
+        for point in 0..point_count {
+            let value_start = camera_offset + point * 3;
+            let delta_start = point_offset + point * 3;
+            for axis in 0..3 {
+                self.values[value_start + axis] += delta[delta_start + axis];
+            }
         }
     }
 
@@ -233,7 +261,7 @@ impl Params for BaParams {
 }
 
 fn ba_params(problem: &ba::Problem) -> BaParams {
-    let mut values = Vec::with_capacity(6 * problem.camera_count() + 3 * problem.point_count());
+    let mut values = Vec::with_capacity(7 * problem.camera_count() + 3 * problem.point_count());
     for camera in &problem.initial_cameras {
         values.extend_from_slice(camera);
     }
@@ -249,7 +277,8 @@ fn ba_params(problem: &ba::Problem) -> BaParams {
 fn run_ba_block(case: &Case, cams: usize, points: usize) -> Outcome {
     type V = Vector<f64, Dynamic>;
     let problem = ba::make_problem(cams, points);
-    let camera_offset = 6 * problem.camera_count();
+    let ambient_camera_offset = 7 * problem.camera_count();
+    let tangent_camera_offset = 6 * problem.camera_count();
 
     let mut opt =
         lm::Optimizer::<BaParams, BlockSparseMat<BaTypes, f64>>::new(tinyopt_options(&case.kind));
@@ -264,15 +293,17 @@ fn run_ba_block(case: &Case, cams: usize, points: usize) -> Outcome {
         let mut g = grad;
         let mut h = h;
         for observation in &problem.observations {
+            let camera_start = observation.camera * 7;
             let camera = [
-                xv[observation.camera * 6],
-                xv[observation.camera * 6 + 1],
-                xv[observation.camera * 6 + 2],
-                xv[observation.camera * 6 + 3],
-                xv[observation.camera * 6 + 4],
-                xv[observation.camera * 6 + 5],
+                xv[camera_start],
+                xv[camera_start + 1],
+                xv[camera_start + 2],
+                xv[camera_start + 3],
+                xv[camera_start + 4],
+                xv[camera_start + 5],
+                xv[camera_start + 6],
             ];
-            let point_start = camera_offset + observation.point * 3;
+            let point_start = ambient_camera_offset + observation.point * 3;
             let point = [xv[point_start], xv[point_start + 1], xv[point_start + 2]];
             let (jc, jp) = ba::projection_jacobians(&camera, &point);
             let projected = ba::project(&camera, &point);
@@ -291,7 +322,10 @@ fn run_ba_block(case: &Case, cams: usize, points: usize) -> Outcome {
                 }
                 for i in 0..3 {
                     let acc: f64 = (0..2).map(|k| jp[k * 3 + i] * r[k]).sum();
-                    g.set_at(point_start + i, g.at(point_start + i) + acc);
+                    g.set_at(
+                        tangent_camera_offset + observation.point * 3 + i,
+                        g.at(tangent_camera_offset + observation.point * 3 + i) + acc,
+                    );
                 }
             }
             if let Some(h) = h.as_mut() {
@@ -315,7 +349,8 @@ fn run_ba_block(case: &Case, cams: usize, points: usize) -> Outcome {
 fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
     type V = Vector<f64, Dynamic>;
     let problem = ba::make_problem(cams, points);
-    let camera_offset = 6 * problem.camera_count();
+    let ambient_camera_offset = 7 * problem.camera_count();
+    let tangent_camera_offset = 6 * problem.camera_count();
     let mut opt = lm::Optimizer::<BaParams, SparseMat>::new(tinyopt_options(&case.kind));
     let mut x = ba_params(&problem);
     // Reuse the triplet buffer across evaluations (the accumulation API is `Fn`).
@@ -331,15 +366,17 @@ fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
         for observation in &problem.observations {
             let camera_index = observation.camera;
             let point_index = observation.point;
+            let camera_start = camera_index * 7;
             let camera = [
-                xv[camera_index * 6],
-                xv[camera_index * 6 + 1],
-                xv[camera_index * 6 + 2],
-                xv[camera_index * 6 + 3],
-                xv[camera_index * 6 + 4],
-                xv[camera_index * 6 + 5],
+                xv[camera_start],
+                xv[camera_start + 1],
+                xv[camera_start + 2],
+                xv[camera_start + 3],
+                xv[camera_start + 4],
+                xv[camera_start + 5],
+                xv[camera_start + 6],
             ];
-            let point_start = camera_offset + point_index * 3;
+            let point_start = ambient_camera_offset + point_index * 3;
             let point = [xv[point_start], xv[point_start + 1], xv[point_start + 2]];
             let (jc, jp) = ba::projection_jacobians(&camera, &point);
             let projected = ba::project(&camera, &point);
@@ -355,7 +392,10 @@ fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
                 }
                 for i in 0..3 {
                     let acc: f64 = (0..2).map(|k| jp[k * 3 + i] * r[k]).sum();
-                    g.set_at(point_start + i, g.at(point_start + i) + acc);
+                    g.set_at(
+                        tangent_camera_offset + point_index * 3 + i,
+                        g.at(tangent_camera_offset + point_index * 3 + i) + acc,
+                    );
                 }
             }
             // Accumulate the full J^T J blocks once (duplicates across
@@ -370,22 +410,24 @@ fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
                 for i in 0..3 {
                     for j in 0..3 {
                         let acc: f64 = (0..2).map(|row| jp[row * 3 + i] * jp[row * 3 + j]).sum();
-                        triplets.push((point_start + i, point_start + j, acc));
+                        let point_tangent = tangent_camera_offset + point_index * 3;
+                        triplets.push((point_tangent + i, point_tangent + j, acc));
                     }
                 }
                 for i in 0..6 {
                     for j in 0..3 {
                         let acc: f64 = (0..2).map(|row| jc[row * 6 + i] * jp[row * 3 + j]).sum();
-                        triplets.push((camera_index * 6 + i, point_start + j, acc));
-                        triplets.push((point_start + j, camera_index * 6 + i, acc));
+                        let point_tangent = tangent_camera_offset + point_index * 3;
+                        triplets.push((camera_index * 6 + i, point_tangent + j, acc));
+                        triplets.push((point_tangent + j, camera_index * 6 + i, acc));
                     }
                 }
             }
         }
         if let Some(h) = h {
             *h = SparseMatrix::from_triplets(
-                camera_offset + 3 * problem.point_count(),
-                camera_offset + 3 * problem.point_count(),
+                tangent_camera_offset + 3 * problem.point_count(),
+                tangent_camera_offset + 3 * problem.point_count(),
                 &triplets,
             );
         }

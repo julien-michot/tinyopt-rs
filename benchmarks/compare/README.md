@@ -44,6 +44,24 @@ the parallel observation accumulator and the block-sparse Schur solver, so only
 the configured pool size changes between the two measurements. Ceres is omitted
 from this tinyopt-only benchmark build.
 
+### Optional wgpu bundle adjustment
+
+The benchmark package also supports GPU BA normal-equation assembly:
+
+```sh
+cargo run --release --manifest-path benchmarks/compare/Cargo.toml \
+    --no-default-features --features wgpu -- \
+    parallel-ba --samples 5 --warmup-ms 100 --wgpu-precision f32
+```
+
+Use `--wgpu-precision f64` to request native f64 assembly. This requires an
+adapter exposing `wgpu::Features::SHADER_F64`; the shader uses quaternion-based
+SE(3) projection and does not rely on f64 trigonometry. The f32 mode uses
+portable WGSL for direct residual, Jacobian, and normal-equation assembly with
+SE(3) camera states (unit quaternion + translation, right-tangent updates).
+Both precision modes keep trial-cost evaluation, the block-sparse Schur solve,
+and LM on the CPU.
+
 ## Backends
 
 | Backend | How it runs |
@@ -105,9 +123,9 @@ These are reported in every generated report:
 
 - **Pose parameterization**: tinyopt-rs uses an SE(3) retraction (quaternion +
   translation, right update). The Rust Ceres binding has no manifold API, so
-  `ceres-rs` optimizes a quaternion + translation whose residual normalizes the
-  quaternion inside the cost (the radial direction is a null direction). The C++
-  tinyopt binary uses Sophus SE(3).
+  `ceres-rs` optimizes normalized quaternion + translation blocks; its analytic
+  Jacobian includes the normalization derivative, with the radial quaternion
+  direction remaining null. The C++ tinyopt binary uses Sophus SE(3).
 - **Gauge fixing**: the Ceres bundle-adjustment benchmark fixes camera 0 and
   point 0; the C++ tinyopt benchmark instead marks them fixed through its
   parameter traits. Both tinyopt-rs and the C++ binary fix the same parameters.

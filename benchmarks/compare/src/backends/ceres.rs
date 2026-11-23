@@ -3,10 +3,9 @@
 
 //! Ceres Solver backend (Rust binding).
 //!
-//! The safe binding has no manifold API, so the pose is parameterized as a
-//! quaternion + translation whose residual normalizes the quaternion inside
-//! the cost (the radial direction is a null direction of the Jacobian). This
-//! keeps the rotation manifold geometry and is documented in the report.
+//! The safe binding has no manifold API, so camera poses use normalized
+//! quaternion + translation blocks. The residual Jacobian accounts for
+//! quaternion normalization, leaving its radial direction null.
 
 use ceres_solver::solver::{LinearSolverType, LoggingType, SolverOptions, TrustRegionStrategyType};
 use ceres_solver::{CostFunctionType, LossFunction, NllsProblem, ParameterBlockOrIndex};
@@ -198,17 +197,17 @@ fn run_ba(cams: usize, points: usize) -> Outcome {
     for observation in observations {
         let measurement = observation.measurement;
         let cost: CostFunctionType = Box::new(move |parameters, residuals, jacobians| {
-            let camera: [f64; 6] = parameters[0].try_into().expect("6 camera params");
+            let camera: [f64; 7] = parameters[0].try_into().expect("7 SE(3) camera params");
             let point: [f64; 3] = parameters[1].try_into().expect("3 point params");
             let projected = ba::project(&camera, &point);
             residuals[0] = projected[0] - measurement[0];
             residuals[1] = projected[1] - measurement[1];
             if let Some(jacobians) = jacobians {
-                let (jc, jp) = ba::projection_jacobians(&camera, &point);
+                let (jc, jp) = ba::projection_jacobians_ambient(&camera, &point);
                 if let Some(block) = &mut jacobians[0] {
                     for row in 0..2 {
-                        for col in 0..6 {
-                            block[row][col] = jc[row * 6 + col];
+                        for col in 0..7 {
+                            block[row][col] = jc[row * 7 + col];
                         }
                     }
                 }
@@ -263,33 +262,6 @@ fn run_ba(cams: usize, points: usize) -> Outcome {
         .solve(&options(LinearSolverType::SPARSE_SCHUR, 3))
         .expect("Ceres solve");
     outcome(&solution)
-}
-
-/// Standard quaternion rotation Jacobian w.r.t. the (unit) quaternion.
-fn quaternion_rotation_jacobian(u: &[f64; 4], point: &[f64; 3]) -> [f64; 12] {
-    let (w, v) = (u[0], [u[1], u[2], u[3]]);
-    let dot = v[0] * point[0] + v[1] * point[1] + v[2] * point[2];
-    let cross = [
-        v[1] * point[2] - v[2] * point[1],
-        v[2] * point[0] - v[0] * point[2],
-        v[0] * point[1] - v[1] * point[0],
-    ];
-    let skew = [
-        [0.0, -point[2], point[1]],
-        [point[2], 0.0, -point[0]],
-        [-point[1], point[0], 0.0],
-    ];
-    let mut j = [0.0; 12];
-    for row in 0..3 {
-        for col in 0..3 {
-            j[row * 4 + col] = -2.0 * point[row] * v[col]
-                + 2.0 * dot * if row == col { 1.0 } else { 0.0 }
-                + 2.0 * v[row] * point[col]
-                - 2.0 * w * skew[row][col];
-        }
-        j[row * 4 + 3] = 2.0 * w * point[row] + 2.0 * cross[row];
-    }
-    j
 }
 
 fn run_block_tridiag(blocks: usize) -> Outcome {
@@ -391,7 +363,7 @@ fn run_pose(count: usize, robust: bool) -> Outcome {
                 && let Some(block) = &mut jacobians[0]
             {
                 // J_q = J_u * (I - u u^T) / ||q||.
-                let ju = quaternion_rotation_jacobian(&u, &world);
+                let ju = ba::quaternion_rotation_jacobian(&u, &world);
                 for row in 0..3 {
                     for col in 0..4 {
                         let mut acc = 0.0;
