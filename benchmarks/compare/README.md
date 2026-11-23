@@ -26,6 +26,24 @@ pixi run -e bench python benchmarks/compare/report.py \
 
 Results and the report are written under `benchmarks/compare/results/`.
 
+### Rayon bundle-adjustment comparison
+
+The optional parallel benchmark compares 1 and 8 Rayon threads on the same
+100-camera / 50,000-point block-sparse BA problem. It reports both direct
+block-Schur compute + solve timings on a BA-shaped Hessian and end-to-end
+optimization timings:
+
+```sh
+cargo run --release --manifest-path benchmarks/compare/Cargo.toml \
+    --no-default-features --features rayon -- \
+    parallel-ba --samples 5 --warmup-ms 100
+```
+
+The thread pool is created outside each timed sample. The end-to-end run uses
+the parallel observation accumulator and the block-sparse Schur solver, so only
+the configured pool size changes between the two measurements. Ceres is omitted
+from this tinyopt-only benchmark build.
+
 ## Backends
 
 | Backend | How it runs |

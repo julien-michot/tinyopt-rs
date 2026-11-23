@@ -231,7 +231,8 @@ impl<P: Params, H: HessianStorage<P::Scalar>> Algorithm<P, H> for Optimizer<P, H
         }
         let q = if quality.is_finite() { quality } else { 0.0 };
         let factor = if q != 0.0 {
-            (1.0 - (2.0 * q - 1.0).powi(3)).max(self.options.lm.good_factor as f64)
+            let x = 2.0 * q - 1.0;
+            (1.0 - x * x * x).max(self.options.lm.good_factor as f64)
         } else {
             self.options.lm.good_factor as f64
         };

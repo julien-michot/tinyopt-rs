@@ -31,6 +31,9 @@ suitesparse = []
 autodiff = ["dep:num-dual", "dep:nalgebra"]
 numdiff = []
 
+# --- Parallel processing ----------------------------------------------------
+rayon = ["dep:rayon"]
+
 # --- Dense linear solver methods (LDLT is enabled by default, as in C++) ----
 solver-ldlt = []
 solver-llt = []
@@ -48,6 +51,7 @@ log = "0.4"
 nalgebra = { version = "0.35", optional = true }
 faer = { version = "0.24", optional = true }
 num-dual = { version = "0.15", optional = true }
+rayon = { version = "1.10", optional = true }
 
 [dev-dependencies]
 approx = "0.5"

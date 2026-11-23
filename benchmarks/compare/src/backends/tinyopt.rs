@@ -5,8 +5,8 @@
 
 use tinyopt::backend::{DenseMatrix, DenseVector, Matrix, Vector};
 use tinyopt::block_sparse::BlockSparseMat;
-use tinyopt::block_tridiag::BlockTridiagMat;
 use tinyopt::block_sparse_types;
+use tinyopt::block_tridiag::BlockTridiagMat;
 use tinyopt::optimizers::lm;
 use tinyopt::sparse::{SparseMat, SparseMatrix};
 use tinyopt::{Cost, Dynamic, Params, Real, Static};
@@ -20,6 +20,11 @@ use crate::problems::{
 };
 
 block_sparse_types!(BaTypes, [6, 3]);
+
+#[cfg(feature = "rayon")]
+mod parallel_ba;
+#[cfg(feature = "rayon")]
+pub(crate) use parallel_ba::{measure_ba_block_schur, run_ba_block_parallel};
 
 pub fn run(case: &Case) -> Outcome {
     match case.kind {
@@ -390,7 +395,6 @@ fn run_ba_sparse(case: &Case, cams: usize, points: usize) -> Outcome {
     let summary = opt.optimize(&mut x, acc);
     outcome(&summary)
 }
-
 
 // --- Block-tridiagonal pose chain --------------------------------------------
 

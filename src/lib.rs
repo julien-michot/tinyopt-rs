@@ -58,6 +58,8 @@ pub use optimizers::AccumulationFn;
 pub use options::{LineSearchMethod, Options, Ordering, Solver};
 pub use params::{Bounds, Params, ParamsWrapper};
 pub use params_pack::{PackValues, ParamsPack};
+#[cfg(feature = "rayon")]
+pub use rayon;
 pub use real::Real;
 pub use sparse::{SimplicialLdl, SparseLinearSolvers, SparseMat, SparseMatf, SparseMatrix};
 pub use stop_reasons::StopReason;

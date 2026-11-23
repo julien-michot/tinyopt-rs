@@ -19,6 +19,9 @@ use crate::options::LinearSolverOptions;
 use crate::real::Real;
 use crate::sparse::{SparseLinearSolvers, SparseMatrix};
 
+#[cfg(feature = "rayon")]
+use rayon::prelude::*;
+
 /// Set of compile-time block sizes.
 pub trait BlockTypes: Clone + Copy + Default + core::fmt::Debug + Send + Sync + 'static {
     /// Block sizes, in declaration order.
@@ -1020,6 +1023,84 @@ struct Coupling {
     block: (usize, usize),
 }
 
+#[derive(Clone, Debug)]
+struct SchurScratch<S> {
+    product: Vec<S>,
+    product2: Vec<S>,
+}
+
+impl<S> Default for SchurScratch<S> {
+    fn default() -> Self {
+        Self {
+            product: Vec::new(),
+            product2: Vec::new(),
+        }
+    }
+}
+
+fn accumulate_eliminated_schur<S: Real>(
+    elims: &[EliminatedBlock],
+    inverses: &[S],
+    couplings: &[Coupling],
+    coupling_data: &[S],
+    scratch: &mut SchurScratch<S>,
+    schur: &mut [S],
+    nr: usize,
+) {
+    for e in elims {
+        let k = e.size;
+        let inv = &inverses[e.inv_start..e.inv_start + k * k];
+        for i in e.coupling_start..e.coupling_end {
+            let ci = &couplings[i];
+            let c0 = &coupling_data[ci.data_start..ci.data_start + ci.len];
+            scratch.product.clear();
+            scratch.product.resize(ci.rows * k, S::zero());
+            block_mat_mul_inv(c0, inv, ci.rows, k, &mut scratch.product);
+            let t0 = &scratch.product[..];
+            for cj in &couplings[i..e.coupling_end] {
+                let c1 = &coupling_data[cj.data_start..cj.data_start + cj.len];
+                if accumulate_pair_tile(
+                    t0,
+                    c1,
+                    schur,
+                    ci.rows,
+                    cj.rows,
+                    k,
+                    ci.reduced_start,
+                    cj.reduced_start,
+                    nr,
+                ) {
+                    continue;
+                }
+                // P = (C_i E^{-1})^T C_j = t0^T C_j (ci.rows x cj.rows),
+                // accumulated contiguously before updating S.
+                let p_len = ci.rows * cj.rows;
+                scratch.product2.clear();
+                scratch.product2.resize(p_len, S::zero());
+                for a in 0..ci.rows {
+                    let row = &mut scratch.product2[a * cj.rows..a * cj.rows + cj.rows];
+                    for q in 0..k {
+                        let t = t0[q * ci.rows + a];
+                        if t == S::zero() {
+                            continue;
+                        }
+                        let c1q = &c1[q * cj.rows..q * cj.rows + cj.rows];
+                        for (value, c) in row.iter_mut().zip(c1q) {
+                            *value += t * *c;
+                        }
+                    }
+                }
+                for a in 0..ci.rows {
+                    let row_a = (ci.reduced_start + a) * nr + cj.reduced_start;
+                    for b in 0..cj.rows {
+                        schur[row_a + b] -= scratch.product2[a * cj.rows + b];
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Block-sparse LDLᵀ with a block Schur complement on the reduced head block.
 ///
 /// When the eliminated blocks are independent (no eliminated-eliminated
@@ -1042,9 +1123,7 @@ pub struct BlockSparseLdlt<T: BlockTypes, S: Real = f64> {
     /// Per-pair block counts of the analyzed structure (re-analysis is skipped
     /// when it is unchanged).
     pattern: Option<Vec<usize>>,
-    // Reusable scratch buffers (no allocation in the solve loop).
-    product: Vec<S>,
-    product2: Vec<S>,
+    scratch: SchurScratch<S>,
     ys: Vec<S>,
     correction: Vec<S>,
     solution: Vec<S>,
@@ -1073,8 +1152,7 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             fallback: None,
             fallback_sparse: SparseMatrix::new(0, 0),
             pattern: None,
-            product: Vec::new(),
-            product2: Vec::new(),
+            scratch: SchurScratch::default(),
             ys: Vec::new(),
             correction: Vec::new(),
             solution: Vec::new(),
@@ -1216,8 +1294,7 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             inverses,
             couplings,
             coupling_data,
-            product,
-            product2,
+            scratch,
             ..
         } = self;
         let schur = schur.get_or_insert_with(|| vec![S::zero(); nr * nr]);
@@ -1275,59 +1352,54 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             coupling_data[c.data_start..c.data_start + c.len].copy_from_slice(block);
         }
 
-        // S(r1, r2) -= C1 E^{-1} C2^T.
-        for e in elims.iter() {
-            let k = e.size;
-            let inv = &inverses[e.inv_start..e.inv_start + k * k];
-            for i in e.coupling_start..e.coupling_end {
-                let ci = &couplings[i];
-                let c0 = &coupling_data[ci.data_start..ci.data_start + ci.len];
-                product.clear();
-                product.resize(ci.rows * k, S::zero());
-                block_mat_mul_inv(c0, inv, ci.rows, k, product);
-                let t0 = &product[..];
-                for cj in &couplings[i..e.coupling_end] {
-                    let c1 = &coupling_data[cj.data_start..cj.data_start + cj.len];
-                    if accumulate_pair_tile(
-                        t0,
-                        c1,
-                        schur,
-                        ci.rows,
-                        cj.rows,
-                        k,
-                        ci.reduced_start,
-                        cj.reduced_start,
+        // Each eliminated block contributes independently to the reduced
+        // system. Use one dense Schur scratch per Rayon chunk to avoid locks.
+        #[cfg(feature = "rayon")]
+        if rayon::current_num_threads() > 1 && elims.len() >= 32 {
+            let chunk_size = elims.len().div_ceil(rayon::current_num_threads());
+            let partials: Vec<Vec<S>> = elims
+                .par_chunks(chunk_size)
+                .map(|chunk| {
+                    let mut partial = vec![S::zero(); nr * nr];
+                    let mut scratch = SchurScratch::default();
+                    accumulate_eliminated_schur(
+                        chunk,
+                        inverses,
+                        couplings,
+                        coupling_data,
+                        &mut scratch,
+                        &mut partial,
                         nr,
-                    ) {
-                        continue;
-                    }
-                    // P = (C_i E^{-1})^T C_j = t0^T C_j (ci.rows x cj.rows),
-                    // accumulated contiguously before updating S.
-                    let p_len = ci.rows * cj.rows;
-                    product2.clear();
-                    product2.resize(p_len, S::zero());
-                    for a in 0..ci.rows {
-                        let row = &mut product2[a * cj.rows..a * cj.rows + cj.rows];
-                        for q in 0..k {
-                            let t = t0[q * ci.rows + a];
-                            if t == S::zero() {
-                                continue;
-                            }
-                            let c1q = &c1[q * cj.rows..q * cj.rows + cj.rows];
-                            for (value, c) in row.iter_mut().zip(c1q) {
-                                *value += t * *c;
-                            }
-                        }
-                    }
-                    for a in 0..ci.rows {
-                        let row_a = (ci.reduced_start + a) * nr + cj.reduced_start;
-                        for b in 0..cj.rows {
-                            schur[row_a + b] -= product2[a * cj.rows + b];
-                        }
-                    }
+                    );
+                    partial
+                })
+                .collect();
+            for partial in partials {
+                for (value, contribution) in schur.iter_mut().zip(partial) {
+                    *value += contribution;
                 }
             }
+        } else {
+            accumulate_eliminated_schur(
+                elims,
+                inverses,
+                couplings,
+                coupling_data,
+                scratch,
+                schur,
+                nr,
+            );
         }
+        #[cfg(not(feature = "rayon"))]
+        accumulate_eliminated_schur(
+            elims,
+            inverses,
+            couplings,
+            coupling_data,
+            scratch,
+            schur,
+            nr,
+        );
 
         if nr > 0 {
             for col in 1..nr {
@@ -1387,7 +1459,7 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
             ys,
             correction,
             solution,
-            product,
+            scratch,
             ..
         } = self;
         let schur = schur.as_ref()?;
@@ -1447,10 +1519,10 @@ impl<T: BlockTypes, S: Real> BlockSparseLdlt<T, S> {
                 }
             }
             let inv = &inverses[e.inv_start..e.inv_start + e.size * e.size];
-            product.resize(e.size, S::zero());
-            block_mat_vec_into(inv, t, e.size, product);
+            scratch.product.resize(e.size, S::zero());
+            block_mat_vec_into(inv, t, e.size, &mut scratch.product);
             for j in 0..e.size {
-                solution[e.start + j] = y[j] - product[j];
+                solution[e.start + j] = y[j] - scratch.product[j];
             }
         }
         solution

@@ -1,7 +1,6 @@
 # AGENTS.md — Development Guidelines for tinyopt
 
-`tinyopt` is the Rust native counterpart of the C++ `tinyopt` library
-(version parity 0.8.0), focused on **dense** systems.
+`tinyopt` is the Rust native counterpart of the C++ `tinyopt` library.
 
 > **CRITICAL AGENT COMMIT POLICY**: AI agents must **never** create git commits
 > unless explicitly commanded by the user in the active session.
@@ -35,12 +34,15 @@ generated report notes.
 
 ## Rules
 
-1. **Zero warnings**: `cargo clippy --all-targets -- -D warnings` and
-   `cargo fmt --check` must pass for every feature combination.
+1. **Zero warnings**: `pixi run clippy` and `pixi run fmt` must pass for every
+   feature combination. Run Rust commands through Pixi: the project requires
+   Rust 1.85+, and the system Cargo/rustfmt may be older or unavailable.
 2. **Both backends always build and pass**: run the test matrix
-   - `cargo test --no-default-features --features nalgebra,autodiff`
-   - `cargo test --no-default-features --features faer`
-   - `cargo test --no-default-features --features faer,autodiff`
+   - `pixi run cargo test --no-default-features --features nalgebra,autodiff`
+   - `pixi run cargo test --no-default-features --features faer`
+   - `pixi run cargo test --no-default-features --features faer,autodiff`
+   For a focused test filter, append it to the Cargo command, e.g.
+   `pixi run cargo test --no-default-features --features nalgebra,autodiff lm`.
 3. **Static and dynamic parameters** must both be exercised in tests.
 4. **No hidden copies**: accumulation uses slices and `add_outer_product`;
    the fixed-size paths must stay allocation-free (verified by an allocation-counter
@@ -62,7 +64,7 @@ generated report notes.
 pixi run build        # cargo build --all-targets
 pixi run test         # cargo test (default features)
 pixi run test-faer    # faer backend
-pixi run fmt
+pixi run fmt          # includes rustfmt checks for root and benchmark packages
 pixi run clippy
 pixi run ci           # fmt + clippy + both backends
 ```

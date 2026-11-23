@@ -36,6 +36,7 @@ Default features are `nalgebra` + `autodiff`. Exactly one backend must be enable
 | `faer` | no | dynamic sizes (`Col`/`Mat`); use with `default-features = false` |
 | `autodiff` | yes | forward-mode AD through `num-dual` (requires `nalgebra`) |
 | `numdiff` | no | central finite differences |
+| `rayon` | no | optional Rayon support for parallel accumulation and independent block-Schur work |
 | `solver-llt`, `solver-lu`, `solver-qr`, `solver-svd` | no | extra dense factorization methods |
 | `suitesparse` | no | optional CHOLMOD backend for scalar sparse solves (system SuiteSparse) |
 
@@ -43,6 +44,33 @@ Default features are `nalgebra` + `autodiff`. Exactly one backend must be enable
 # faer backend without autodiff
 tinyopt = { version = "0.8", default-features = false, features = ["faer"] }
 ```
+
+### Optional Rayon parallelism
+
+Enable `rayon` to use Rayon in a custom accumulation callback and to parallelize
+large independent-block Schur computations in the block-sparse solver:
+
+```toml
+tinyopt = { version = "0.8", features = ["rayon"] }
+```
+
+`tinyopt::rayon` re-exports Rayon when the feature is enabled. Run optimization
+inside a configured pool to control the number of threads:
+
+```rust,ignore
+let pool = tinyopt::rayon::ThreadPoolBuilder::new()
+    .num_threads(8)
+    .build()?;
+pool.install(|| {
+    tinyopt::optimize(&mut params, accumulation, &options)
+});
+```
+
+Existing accumulation callbacks stay serial unless they explicitly use Rayon
+parallel iterators with thread-local partials and a reduction. The block-sparse
+solver parallelizes the numeric Schur work only when eliminated blocks are
+independent and the problem is large enough; coupled/fallback systems keep the
+serial path. Builds without `rayon` have no Rayon dependency.
 
 ### Optional CHOLMOD backend
 

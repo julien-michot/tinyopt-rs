@@ -122,6 +122,48 @@ fn schur_solver_matches_dense() {
     }
 }
 
+#[cfg(feature = "rayon")]
+#[test]
+fn parallel_independent_block_schur_matches_single_thread() {
+    let point_count = 40;
+    let mut h = H::with_counts(&[1, point_count]);
+    for i in 0..2 {
+        h.block_mut::<2, 2>(0, 0).set_at(i, i, 10.0);
+    }
+    for point in 0..point_count {
+        for i in 0..3 {
+            h.block_mut::<3, 3>(point, point)
+                .set_at(i, i, 4.0 + point as f64 * 0.01);
+        }
+        h.block_mut::<2, 3>(0, point).set_at(0, 0, 0.05);
+        h.block_mut::<2, 3>(0, point).set_at(1, 1, -0.04);
+    }
+
+    let rhs = (0..h.dims())
+        .map(|i| [1.0, -2.0, 0.5][i % 3])
+        .collect::<Vec<_>>();
+    let solve = |threads| {
+        let pool = tinyopt::rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("Rayon pool");
+        pool.install(|| {
+            let mut solver = BlockSparseLdlt::<TwoThree, f64>::new();
+            assert!(solver.analyze(&h, 2));
+            assert!(solver.compute(&h));
+            let mut x = vec![0.0; h.dims()];
+            assert!(solver.solve_into(&h, &rhs, &mut x));
+            x
+        })
+    };
+
+    let single_thread = solve(1);
+    let parallel = solve(4);
+    for (actual, expected) in parallel.iter().zip(single_thread) {
+        assert_relative_eq!(actual, &expected, epsilon = 1e-10);
+    }
+}
+
 #[test]
 fn invalid_schur_boundary_is_rejected() {
     let h = spd_block_matrix();

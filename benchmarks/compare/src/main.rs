@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use results::{IterationRecord, Meta, Record, Results};
 
 const TINYOPT: &str = "tinyopt-rs";
+#[cfg(feature = "ceres")]
 const CERES: &str = "ceres-rs";
 const CPP: &str = "cpp-tinyopt";
 
@@ -43,13 +44,21 @@ impl Default for Args {
             warmup_ms: 100,
             quick: false,
             full: false,
-            backends: vec!["tinyopt".into(), "ceres".into(), "cpp".into()],
+            backends: default_backends(),
             cpp_bench: manifest
                 .join("../../../exp-mop/build-bench/benchmarks/tinyopt/tinyopt_bench_tinyopt"),
             filter: None,
             exclude: None,
         }
     }
+}
+
+fn default_backends() -> Vec<String> {
+    let mut backends = vec!["tinyopt".into()];
+    #[cfg(feature = "ceres")]
+    backends.push("ceres".into());
+    backends.push("cpp".into());
+    backends
 }
 
 fn main() {
@@ -60,12 +69,93 @@ fn main() {
         "run" => run(args),
         "list" => list(&args),
         "check" => check(&args),
+        "parallel-ba" => parallel_ba(args),
         other => {
             eprintln!("unknown command: {other}");
-            eprintln!("usage: tinyopt-bench-compare [run|list|check] [OPTIONS]");
+            eprintln!("usage: tinyopt-bench-compare [run|list|check|parallel-ba] [OPTIONS]");
             std::process::exit(2);
         }
     }
+}
+
+#[cfg(feature = "rayon")]
+fn parallel_ba(args: Args) {
+    let cams = 100;
+    let points = 50_000;
+    let case = problems::Case {
+        kind: problems::Kind::BundleAdjustmentBlock { cams, points },
+        name: format!("{cams}c {points}p block-sparse"),
+        short: format!("{cams}c {points}p"),
+    };
+    let initial_cost = problems::bundle_adjustment::initial_cost(
+        &problems::bundle_adjustment::make_problem(cams, points),
+    );
+    let mut outcomes = Vec::new();
+
+    println!(
+        "Bundle adjustment: {cams} cameras, {points} points; {} samples, {} ms warmup",
+        args.samples, args.warmup_ms
+    );
+    println!("Block-sparse Schur compute + solve (BA-shaped Hessian):");
+    println!(
+        "{:<18} {:>12} {:>12} {:>12}",
+        "THREADS", "MEAN (ms)", "MEDIAN (ms)", "MIN (ms)"
+    );
+    for threads in [1, 8] {
+        let stats = backends::tinyopt::measure_ba_block_schur(
+            cams,
+            points,
+            threads,
+            Duration::from_millis(args.warmup_ms),
+            args.samples,
+        );
+        println!(
+            "{threads:<18} {:>12.2} {:>12.2} {:>12.2}",
+            stats.mean_ns / 1e6,
+            stats.median_ns / 1e6,
+            stats.min_ns / 1e6,
+        );
+    }
+
+    println!("End-to-end tinyopt-rs optimization:");
+    println!(
+        "{:<18} {:>12} {:>12} {:>12} {:>8} {:>12}",
+        "THREADS", "MEAN (ms)", "MEDIAN (ms)", "MIN (ms)", "ITERS", "FINAL COST"
+    );
+    for threads in [1, 8] {
+        let pool = tinyopt::rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("build Rayon thread pool");
+        let (stats, outcome) =
+            harness::measure(Duration::from_millis(args.warmup_ms), args.samples, || {
+                backends::tinyopt::run_ba_block_parallel(&case, cams, points, &pool)
+            });
+        assert!(
+            outcome.converged && outcome.final_cost < initial_cost * 0.1,
+            "{threads}-thread BA did not converge: {outcome:?}"
+        );
+        println!(
+            "{threads:<18} {:>12.2} {:>12.2} {:>12.2} {:>8} {:>12.4e}",
+            stats.mean_ns / 1e6,
+            stats.median_ns / 1e6,
+            stats.min_ns / 1e6,
+            outcome.iterations,
+            outcome.final_cost
+        );
+        outcomes.push(outcome);
+    }
+    let cost_tolerance = 1e-8 * outcomes[0].final_cost.abs().max(1.0);
+    assert!(
+        (outcomes[0].final_cost - outcomes[1].final_cost).abs() < cost_tolerance,
+        "1-thread and 8-thread final costs diverged: {outcomes:?}"
+    );
+}
+
+#[cfg(not(feature = "rayon"))]
+fn parallel_ba(_args: Args) {
+    eprintln!("the parallel-ba benchmark requires --features rayon");
+    std::process::exit(2);
 }
 
 fn parse_args(argv: Vec<String>) -> Args {
@@ -232,6 +322,7 @@ fn run(args: Args) {
                     print_line(TINYOPT, case, stats.mean_ns);
                 }
             }
+            #[cfg(feature = "ceres")]
             "ceres" => {
                 backend_info.insert(CERES.into(), "ceres-solver 0.5 (vendored Ceres 2.2)".into());
                 for case in &cases {

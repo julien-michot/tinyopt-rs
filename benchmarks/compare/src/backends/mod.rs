@@ -3,6 +3,7 @@
 
 //! Backend runners.
 
+#[cfg(feature = "ceres")]
 pub mod ceres;
 pub mod cpp;
 pub mod tinyopt;
