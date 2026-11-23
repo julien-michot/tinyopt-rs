@@ -125,23 +125,6 @@ fn parallel_ba(args: Args) {
 
     #[cfg(feature = "rayon")]
     {
-        println!("Normal-equation assembly:");
-        for threads in [1, 8] {
-            let stats = backends::tinyopt::measure_ba_block_cpu_assembly(
-                cams,
-                points,
-                threads,
-                Duration::from_millis(args.warmup_ms),
-                args.samples,
-            );
-            println!(
-                "{:<18} {:>12.2} {:>12.2} {:>12.2}",
-                format!("{threads}-thread CPU"),
-                stats.mean_ns / 1e6,
-                stats.median_ns / 1e6,
-                stats.min_ns / 1e6,
-            );
-        }
         println!("End-to-end tinyopt-rs optimization:");
         println!(
             "{:<18} {:>12} {:>12} {:>12} {:>8} {:>12}",
