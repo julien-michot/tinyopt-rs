@@ -1,0 +1,27 @@
+[package]
+name = "tinyopt-bench-compare"
+version = "0.8.0"
+edition = "2024"
+publish = false
+
+# Standalone package: keep the Ceres build out of the library's test loop.
+[workspace]
+
+[features]
+default = ["ceres"]
+ceres = ["dep:ceres-solver"]
+# Build with `--features suitesparse` to benchmark the optional CHOLMOD backend.
+suitesparse = ["tinyopt/suitesparse"]
+rayon = ["tinyopt/rayon"]
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies]
+tinyopt = { path = "../..", default-features = false, features = ["nalgebra"] }
+ceres-solver = { version = "0.5", default-features = false, features = ["source"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+num-traits = "0.2"
+quick-xml = "0.37"
+wgpu = { version = "30", optional = true, features = ["glsl", "wgsl"] }
+pollster = { version = "0.4", optional = true }
+bytemuck = { version = "1", optional = true }

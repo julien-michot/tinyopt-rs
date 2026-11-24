@@ -1,0 +1,99 @@
+[package]
+name = "tinyopt"
+version = "0.8.0"
+edition = "2024"
+rust-version = "1.89"
+description = "A lightweight, Rust native optimization library (dense, sparse and block-structured systems)"
+authors = ["Julien Michot"]
+license = "Apache-2.0"
+repository = "https://github.com/julienmichot/tinyopt-rs"
+documentation = "https://docs.rs/tinyopt"
+readme = "README.md"
+keywords = ["optimization", "least-squares", "autodiff", "nonlinear"]
+categories = ["science", "mathematics"]
+exclude = ["/AGENTS.md", "/pixi.toml", "/pixi.lock", "/.github", "/docs"]
+
+[lib]
+name = "tinyopt"
+path = "src/lib.rs"
+
+[features]
+default = ["nalgebra", "autodiff"]
+
+# --- Backends (exactly one must be enabled) ---------------------------------
+nalgebra = ["dep:nalgebra", "solver-ldlt"]
+faer = ["dep:faer", "solver-ldlt"]
+
+# --- Optional external solvers ----------------------------------------------
+suitesparse = []
+
+# --- Differentiation --------------------------------------------------------
+autodiff = ["dep:num-dual", "dep:nalgebra"]
+numdiff = []
+
+# --- Parallel processing ----------------------------------------------------
+rayon = ["dep:rayon"]
+
+# --- Dense linear solver methods (LDLT is enabled by default, as in C++) ----
+solver-ldlt = []
+solver-llt = []
+solver-lu = []
+solver-qr = []
+solver-svd = []
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+num-traits = "0.2"
+log = "0.4"
+
+nalgebra = { version = "0.35", optional = true }
+faer = { version = "0.24", optional = true }
+num-dual = { version = "0.15", optional = true }
+rayon = { version = "1.10", optional = true }
+
+[dev-dependencies]
+approx = "0.5"
+criterion = "0.8"
+
+[[bench]]
+name = "dense"
+harness = false
+
+[[bench]]
+name = "sparse"
+harness = false
+
+[[example]]
+name = "astronomy"
+required-features = ["autodiff"]
+
+[[example]]
+name = "biology"
+required-features = ["autodiff"]
+
+[[example]]
+name = "computer_vision"
+required-features = ["autodiff"]
+
+[[example]]
+name = "finance"
+required-features = ["autodiff"]
+
+[[example]]
+name = "physics"
+required-features = ["autodiff"]
+
+[[example]]
+name = "robotics"
+required-features = ["autodiff"]
+
+[[example]]
+name = "signal_processing"
+required-features = ["autodiff"]
+
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
