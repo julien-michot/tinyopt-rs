@@ -131,8 +131,8 @@ impl<S: Real> IncompleteCholesky<S> {
                 let k = self.row_col[p];
                 if k == i {
                     let mut sum = S::zero();
-                    for q in lo..p {
-                        sum += self.row_val[q] * self.row_val[q];
+                    for &value in &self.row_val[lo..p] {
+                        sum += value * value;
                     }
                     let pivot = self.row_val[p] - sum;
                     if pivot <= S::zero() || !pivot.is_finite() {

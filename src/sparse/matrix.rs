@@ -336,8 +336,7 @@ impl<S: Real> SparseMatrix<S> {
         // Fast path: every strict-upper entry already has a lower counterpart.
         let mut complete = true;
         for j in 0..self.ncols {
-            for p in self.col_ptrs[j]..self.col_ptrs[j + 1] {
-                let i = self.row_indices[p];
+            for &i in &self.row_indices[self.col_ptrs[j]..self.col_ptrs[j + 1]] {
                 if i < j && !lower.has_entry(j, i) {
                     complete = false;
                     break;
@@ -405,8 +404,7 @@ impl<S: Real> SparseMatrix<S> {
         let upper = self.upper_csc();
         let mut complete = true;
         for j in 0..self.ncols {
-            for p in self.col_ptrs[j]..self.col_ptrs[j + 1] {
-                let i = self.row_indices[p];
+            for &i in &self.row_indices[self.col_ptrs[j]..self.col_ptrs[j + 1]] {
                 if i > j && !upper.has_entry(j, i) {
                     complete = false;
                     break;

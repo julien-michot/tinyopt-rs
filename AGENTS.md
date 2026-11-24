@@ -36,7 +36,7 @@ generated report notes.
 
 1. **Zero warnings**: `pixi run clippy` and `pixi run fmt` must pass for every
    feature combination. Run Rust commands through Pixi: the project requires
-   Rust 1.85+, and the system Cargo/rustfmt may be older or unavailable.
+   Rust 1.89+, and the system Cargo/rustfmt may be older or unavailable.
 2. **Both backends always build and pass**: run the test matrix
    - `pixi run cargo test --no-default-features --features nalgebra,autodiff`
    - `pixi run cargo test --no-default-features --features faer`

@@ -184,8 +184,8 @@ where
         let cost = Cost::new(out.residuals[0].to_f64().expect("scalar fits in f64"));
         if let Some(g) = grad {
             DenseVector::set_zero(g);
-            for i in 0..out.num_params {
-                g.set_at(i, out.jacobian[i]);
+            for (i, &derivative) in out.jacobian.iter().take(out.num_params).enumerate() {
+                g.set_at(i, derivative);
             }
         }
         if let Some(hess) = h {

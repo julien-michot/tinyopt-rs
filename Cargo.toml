@@ -2,7 +2,7 @@
 name = "tinyopt"
 version = "0.8.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "A lightweight, Rust native optimization library (dense, sparse and block-structured systems)"
 authors = ["Julien Michot"]
 license = "Apache-2.0"

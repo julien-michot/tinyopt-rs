@@ -141,8 +141,7 @@ impl<S: Real> SimplicialLdl<S> {
         let mut upper_idx = vec![0usize; upper_ptr[n]];
         let mut pos = upper_ptr.clone();
         for c in 0..n {
-            for p in self.work_ptr[c]..self.work_ptr[c + 1] {
-                let r = self.work_idx[p];
+            for &r in &self.work_idx[self.work_ptr[c]..self.work_ptr[c + 1]] {
                 upper_idx[pos[r]] = c;
                 pos[r] += 1;
             }
