@@ -16,12 +16,12 @@ fn main() {
     let mut include: Option<PathBuf> = std::env::var_os("CHOLMOD_INCLUDE_DIR").map(PathBuf::from);
     let mut lib: Option<PathBuf> = std::env::var_os("CHOLMOD_LIB_DIR").map(PathBuf::from);
 
-    if include.is_none() || lib.is_none() {
-        if let Some(prefix) = std::env::var_os("CONDA_PREFIX") {
-            let prefix = PathBuf::from(prefix);
-            include.get_or_insert_with(|| prefix.join("include/suitesparse"));
-            lib.get_or_insert_with(|| prefix.join("lib"));
-        }
+    if (include.is_none() || lib.is_none())
+        && let Some(prefix) = std::env::var_os("CONDA_PREFIX")
+    {
+        let prefix = PathBuf::from(prefix);
+        include.get_or_insert_with(|| prefix.join("include/suitesparse"));
+        lib.get_or_insert_with(|| prefix.join("lib"));
     }
     for base in ["/opt/homebrew", "/usr/local"] {
         let root = PathBuf::from(base);

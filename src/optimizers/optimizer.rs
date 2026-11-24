@@ -476,22 +476,21 @@ where
 
         // --- User and time based stopping criteria --------------------------
         if reason == StopReason::None {
-            if let Some(cb) = &options.stop.stop_callback {
-                if cb(cost.cost, dx_norm2, grad_norm2) {
-                    reason = StopReason::UserStopped;
-                }
+            if let Some(cb) = &options.stop.stop_callback
+                && cb(cost.cost, dx_norm2, grad_norm2)
+            {
+                reason = StopReason::UserStopped;
             }
-            if reason == StopReason::None {
-                if let Some(cb) = &options.stop.stop_callback2 {
-                    if needs_f32 {
-                        let grad_f32: Vec<f32> = DenseVector::as_slice(&grad)
-                            .iter()
-                            .map(|v| v.to_f32().expect("scalar fits in f32"))
-                            .collect();
-                        if cb(cost.cost, &dx_f32, &grad_f32) {
-                            reason = StopReason::UserStopped;
-                        }
-                    }
+            if reason == StopReason::None
+                && let Some(cb) = &options.stop.stop_callback2
+                && needs_f32
+            {
+                let grad_f32: Vec<f32> = DenseVector::as_slice(&grad)
+                    .iter()
+                    .map(|v| v.to_f32().expect("scalar fits in f32"))
+                    .collect();
+                if cb(cost.cost, &dx_f32, &grad_f32) {
+                    reason = StopReason::UserStopped;
                 }
             }
         }
@@ -529,10 +528,10 @@ where
         algo.save_final_system(&H::zeros(dims), sum.final_cost);
     }
 
-    if options.exp.final_cov {
-        if let Some(cov) = algo.covariance(&options.exp.cov_options) {
-            sum.final_cov = Some(cov);
-        }
+    if options.exp.final_cov
+        && let Some(cov) = algo.covariance(&options.exp.cov_options)
+    {
+        sum.final_cov = Some(cov);
     }
 
     if options.log.enable && sum.stop_reason != StopReason::None {

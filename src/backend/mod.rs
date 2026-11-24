@@ -238,10 +238,11 @@ pub fn solve<S: Real, D: Dim>(
     // Closed-form small systems (mirrors the C++ DenseLinearSolvers fast path).
     if matches!(method, LinearSolverMethod::Ldlt | LinearSolverMethod::Llt) {
         let n = a.nrows();
-        if n == a.ncols() && (1..=4).contains(&n) {
-            if let Some(x) = crate::math::solve_small_dense_system::<S, D>(a, b) {
-                return Some(x);
-            }
+        if n == a.ncols()
+            && (1..=4).contains(&n)
+            && let Some(x) = crate::math::solve_small_dense_system::<S, D>(a, b)
+        {
+            return Some(x);
         }
     }
     match method {

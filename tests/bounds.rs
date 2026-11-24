@@ -339,11 +339,11 @@ fn bounds_with_a_sparse_schur() {
         // Head-tail couplings (Schur complement is non-trivial).
         for i in 0..8 {
             for j in 8..n {
-                if (i + j) % 3 == 0 {
-                    if let Some(h) = h.as_mut() {
-                        *h.coeff_ref(i, j) += 0.05;
-                        *h.coeff_ref(j, i) += 0.05;
-                    }
+                if (i + j) % 3 == 0
+                    && let Some(h) = h.as_mut()
+                {
+                    *h.coeff_ref(i, j) += 0.05;
+                    *h.coeff_ref(j, i) += 0.05;
                 }
             }
         }
